@@ -82,6 +82,20 @@ func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
 	}
 }
 
+func TestInlineCodeInAReplyHasNoBackground(t *testing.T) {
+	replyRenderer, err := NewReplyRenderer(60)
+	if err != nil {
+		t.Fatalf("NewReplyRenderer: %v", err)
+	}
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run `go test` now."}, -1, 60, replyRenderer)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	if joined := strings.Join(rows, "\n"); strings.Contains(joined, "48;") {
+		t.Errorf("reply rows = %q, want no background color", joined)
+	}
+}
+
 func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
 	entry := dialogueEntry{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}}
 	rows, err := EntryRows(entry, -1, 60, nil)

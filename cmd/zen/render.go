@@ -44,14 +44,14 @@ const queuedNote = "queued"
 // no blank lines around the document.
 var replyStyle = func() ansi.StyleConfig {
 	style := styles.DarkStyleConfig
-	text, iris, gold, overlay, foam := colorText, colorIris, colorGold, colorOverlay, colorFoam
+	text, iris, gold, foam := colorText, colorIris, colorGold, colorFoam
 	noMargin := uint(0)
 	style.Document = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: &text}, Margin: &noMargin}
 	style.Heading.Color = &iris
 	style.H1, style.H2, style.H3, style.H4, style.H5, style.H6 = ansi.StyleBlock{}, ansi.StyleBlock{}, ansi.StyleBlock{},
 		ansi.StyleBlock{}, ansi.StyleBlock{}, ansi.StyleBlock{}
-	style.Code.Color = &gold
-	style.Code.BackgroundColor = &overlay
+	// Inline code is gold with no background, so it does not look like a prompt band.
+	style.Code = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: &gold}}
 	style.Link = ansi.StylePrimitive{Color: &foam, Underline: style.Link.Underline}
 	style.LinkText = ansi.StylePrimitive{Color: &foam, Bold: style.LinkText.Bold}
 	style.CodeBlock.Chroma = nil
