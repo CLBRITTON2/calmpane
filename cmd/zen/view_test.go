@@ -180,3 +180,67 @@ func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 		t.Errorf("rows below the view after Down = %d, want 0", rowsBelowView)
 	}
 }
+
+func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model = model.withSize(60, 30).withEntries([]dialogueEntry{
+		{kind: replyEntry, text: "Old:\n\n```\nold block\n```"},
+		{kind: replyEntry, text: "New:\n\n```go\nfirst()\n```\n\n```go\nfunc f() {\n\treturn \n}\n```\n\nDone."},
+		{kind: promptEntry, text: "thanks\n\n```\nmine\n```"},
+	})
+	copied, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	copiedModel := copied.(zenModel)
+	if copyCmd == nil {
+		t.Fatalf("ctrl+y returned no command, want the clipboard set")
+	}
+	if got, want := copyCmd(), tea.SetClipboard("func f() {\n\treturn \n}")(); !reflect.DeepEqual(got, want) {
+		t.Errorf("ctrl+y sets the clipboard with %#v, want %#v", got, want)
+	}
+	if !strings.Contains(ansi.Strip(copiedModel.screen()), "Copied the last code block.") {
+		t.Errorf("screen after ctrl+y lacks the copy status:\n%s", ansi.Strip(copiedModel.screen()))
+	}
+	typed, _ := copiedModel.Update(pressedKey('a'))
+	if strings.Contains(ansi.Strip(typed.(zenModel).screen()), "Copied the last code block.") {
+		t.Errorf("screen after the next key still shows the copy status:\n%s", ansi.Strip(typed.(zenModel).screen()))
+	}
+}
+
+func TestCtrlYWithNoCodeBlockSaysSoAndCopiesNothing(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model = model.withSize(60, 12).withEntries([]dialogueEntry{
+		{kind: promptEntry, text: "hello"}, {kind: replyEntry, text: "Use `inline code` only."},
+	})
+	pressed, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	if copyCmd != nil {
+		t.Errorf("ctrl+y with no code block returned %#v, want no command", copyCmd())
+	}
+	if !strings.Contains(ansi.Strip(pressed.(zenModel).screen()), "No code block to copy.") {
+		t.Errorf("screen lacks the no code block status:\n%s", ansi.Strip(pressed.(zenModel).screen()))
+	}
+}
+
+func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
+	cases := []struct {
+		name      string
+		statusMsg tea.Msg
+		wantShown string
+	}{
+		{name: "agent status", statusMsg: agentStatusMsg{status: "working"}, wantShown: "Working..."},
+		{name: "problem", statusMsg: problemMsg{err: errors.New("herdr pane get failed")},
+			wantShown: "herdr pane get failed"},
+		{name: "prompt refused", statusMsg: promptSentMsg{err: errAgentBlocked},
+			wantShown: "Claude is waiting for you. Press alt+x to answer."},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+			model = model.withSize(60, 12)
+			copied, _ := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+			updated, _ := copied.(zenModel).Update(testCase.statusMsg)
+			shown := ansi.Strip(updated.(zenModel).screen())
+			if strings.Contains(shown, "No code block to copy.") || !strings.Contains(shown, testCase.wantShown) {
+				t.Errorf("screen = %q, want %q in place of the copy status", shown, testCase.wantShown)
+			}
+		})
+	}
+}

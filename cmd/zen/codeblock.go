@@ -72,6 +72,23 @@ func CodeBlocks(markdown string) ([]codeBlock, error) {
 	return blocks, nil
 }
 
+// LastCodeBlock is the newest fenced code block of the entries' replies, and false when they hold none.
+func LastCodeBlock(entries []dialogueEntry) (codeBlock, bool, error) {
+	for index := len(entries) - 1; index >= 0; index-- {
+		if entries[index].kind != replyEntry {
+			continue
+		}
+		replyBlocks, err := CodeBlocks(entries[index].text)
+		if err != nil {
+			return codeBlock{}, false, err
+		}
+		if len(replyBlocks) > 0 {
+			return replyBlocks[len(replyBlocks)-1], true, nil
+		}
+	}
+	return codeBlock{}, false, nil
+}
+
 func lineStart(markdown string, offset int) int {
 	return strings.LastIndex(markdown[:max(offset, 0)], "\n") + 1
 }

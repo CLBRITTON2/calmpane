@@ -58,7 +58,9 @@ type zenModel struct {
 	// rowsBelowView counts the rows under the bottom of the view, 0 when it shows the newest entry.
 	rowsBelowView int
 	status        string
-	input         textinput.Model
+	// copyStatus reports a ctrl+y copy in place of status until the next key or status.
+	copyStatus string
+	input      textinput.Model
 }
 
 func RunZenView(herdr herdrCLI) error {
@@ -229,14 +231,17 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withEntries(msg.entries), nil
 	case agentStatusMsg:
 		m.status = statusLine(msg.status)
+		m.copyStatus = ""
 		return m, nil
 	case problemMsg:
 		m.status = errorStyle.Render(msg.err.Error())
+		m.copyStatus = ""
 		return m, nil
 	case fatalMsg:
 		m.fatal = msg.err
 		return m, nil
 	case promptSentMsg:
+		m.copyStatus = ""
 		switch {
 		case errors.Is(msg.err, errAgentBlocked):
 			m.status = errorStyle.Render("Claude is waiting for you. Press " + toggleKey + " to answer.")
@@ -250,6 +255,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.fatal != nil {
 			return m, tea.Quit
 		}
+		m.copyStatus = ""
 		return m.withKey(msg)
 	}
 	var inputCmd tea.Cmd
@@ -269,6 +275,19 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withRowsBelowViewChangedBy(-arrowScrollRows), nil
 	case "end":
 		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
+	case "ctrl+y":
+		lastBlock, hasCodeBlock, err := LastCodeBlock(m.entries)
+		switch {
+		case err != nil:
+			m.status = errorStyle.Render(err.Error())
+			return m, nil
+		case !hasCodeBlock:
+			m.copyStatus = workingStyle.Render("No code block to copy.")
+			return m, nil
+		default:
+			m.copyStatus = workingStyle.Render("Copied the last code block.")
+			return m, tea.SetClipboard(lastBlock.code)
+		}
 	case "enter":
 		prompt := m.input.Value()
 		if prompt == "" {
@@ -381,6 +400,10 @@ func (m zenModel) screen() string {
 	visible := rowsOldestFirst[max(end-height, 0):end]
 	rows := make([]string, height-len(visible), height+rowsUnderEntries)
 	rows = append(rows, visible...)
-	rows = append(rows, " "+m.status, separatorStyle.Render(strings.Repeat("─", m.width)), " "+m.input.View())
+	shownStatus := m.status
+	if m.copyStatus != "" {
+		shownStatus = m.copyStatus
+	}
+	rows = append(rows, " "+shownStatus, separatorStyle.Render(strings.Repeat("─", m.width)), " "+m.input.View())
 	return strings.Join(rows, "\n")
 }
