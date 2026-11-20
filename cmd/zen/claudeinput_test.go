@@ -12,6 +12,7 @@ func TestClaudeInputBoxOnScreenGivesTheTypedDraftAndNoPlaceholder(t *testing.T) 
 		want    claudeInputBox
 	}{
 		{capture: "claude-input-one-row.ansi", want: claudeInputBox{Draft: "move this draft", Rows: 1}},
+		{capture: "claude-input-titled-rule.ansi", want: claudeInputBox{Draft: "move this draft", Rows: 1}},
 		{
 			capture: "claude-input-wrapped.ansi",
 			want: claudeInputBox{Draft: "this unsent draft is long enough to wrap across two rows of the Claude input " +

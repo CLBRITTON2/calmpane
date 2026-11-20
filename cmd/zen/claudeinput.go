@@ -17,15 +17,16 @@ type claudeInputBox struct {
 	Rows  int
 }
 
-// ClaudeInputBoxOnScreen reads the box from herdr pane read --format ansi: the rows between the last two rules. pane read
-// drops the space at a soft wrap, so the rows are joined with one. A box scrolled past its top shows ↑ in its top rule
-// and gives no draft.
+// ClaudeInputBoxOnScreen reads the box from herdr pane read --format ansi: the rows between the last two rules. A rule
+// starts and ends with ─ and can carry text inside: the session name a /rename gave, or ↑ in the top rule of a box
+// scrolled past its top, which gives no draft. pane read drops the space at a soft wrap, so the rows are joined with
+// one.
 func ClaudeInputBoxOnScreen(screen string) claudeInputBox {
 	rows := strings.Split(screen, "\n")
 	ruleRows := []int{}
 	for index, row := range rows {
 		text := strings.TrimRight(ansi.Strip(row), " \r")
-		if text != "" && strings.Trim(text, "─") == "" {
+		if strings.HasPrefix(text, "─") && strings.HasSuffix(text, "─") {
 			ruleRows = append(ruleRows, index)
 		}
 	}
