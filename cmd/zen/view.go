@@ -18,6 +18,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
 )
 
 // herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
@@ -92,8 +93,9 @@ type zenModel struct {
 	newestCodeBlock *codeBlockPosition
 	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
 	// entries until a prompt entry with the same text arrives.
-	earlyPrompts []earlyPrompt
-	input        textarea.Model
+	earlyPrompts     []earlyPrompt
+	input            textarea.Model
+	claudeStatusLine string
 }
 
 // Shift+Enter inserts a newline, since Enter sends.
@@ -123,7 +125,7 @@ func RunZenView(herdr herdrCLI) error {
 	claudePaneID := os.Getenv(claudePaneEnv)
 	model := zenModel{claude: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
-	transcript, err := openClaudeTranscript(herdr, claudePaneID)
+	transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(herdr, claudePaneID)
 	mode, modeErr := ZenModeOfPlugin(herdr.pluginID)
 	model.fatal = errors.Join(err, modeErr)
 	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: ""})
@@ -133,6 +135,7 @@ func RunZenView(herdr herdrCLI) error {
 			program.Send(fatalMsg{err: fmt.Errorf("Cannot read %s: %w", transcript.Name(), err)})
 		}()
 		go pollAgentStatus(herdr, claudePaneID, program.Send)
+		go followClaudeStatusLine(statusLinePath, 300*time.Millisecond, program.Send)
 	}
 	finalModel, runErr := program.Run()
 	if transcript != nil {
@@ -144,18 +147,28 @@ func RunZenView(herdr herdrCLI) error {
 	return runErr
 }
 
-func openClaudeTranscript(herdr herdrCLI, claudePaneID string) (*os.File, error) {
+func openClaudeTranscriptAndStatusLinePath(herdr herdrCLI, claudePaneID string) (*os.File, string, error) {
 	if claudePaneID == "" {
-		return nil, fmt.Errorf("%s is not set: the toggle action opens the zen pane", claudePaneEnv)
+		return nil, "", fmt.Errorf("%s is not set: the toggle action opens the zen pane", claudePaneEnv)
 	}
 	claudePane, err := herdr.Pane(claudePaneID)
 	if err != nil {
-		return nil, err
+		return nil, "", err
 	}
 	if claudePane.AgentSession == nil || claudePane.AgentSession.Agent != "claude" {
-		return nil, errors.New("No Claude session in this pane.")
+		return nil, "", errors.New("No Claude session in this pane.")
 	}
-	return openTranscript(claudePane.AgentSession.Value)
+	transcript, err := openTranscript(claudePane.AgentSession.Value)
+	if err != nil {
+		return nil, "", err
+	}
+	localAppData, err := os.UserCacheDir()
+	if err != nil {
+		return nil, "", errors.Join(fmt.Errorf("find the local app data directory: %w", err), transcript.Close())
+	}
+	// windows-dev's claude/statusline.ps1 writes it
+	statusLinePath := filepath.Join(localAppData, "windows-dev", "statusline", claudePane.AgentSession.Value)
+	return transcript, statusLinePath, nil
 }
 
 func openTranscript(sessionID string) (*os.File, error) {
@@ -308,6 +321,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case fatalMsg:
 		m.fatal = msg.err
 		return m, nil
+	case claudeStatusLineMsg:
+		m.claudeStatusLine = msg.line
+		return m.withVisibleRowsDrawn(), nil
 	case promptSentMsg:
 		m.copyStatus = ""
 		switch {
@@ -551,7 +567,14 @@ func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
 }
 
 func (m zenModel) entriesHeight() int {
-	return max(m.height-rowsAboveInput-m.input.Height(), 0)
+	return max(m.height-rowsAboveInput-m.input.Height()-m.rowsBelowInput(), 0)
+}
+
+func (m zenModel) rowsBelowInput() int {
+	if m.claudeStatusLine == "" {
+		return 0
+	}
+	return rowsBelowInputWithStatusLine
 }
 
 // withVisibleRowsDrawn draws entries from the newest back until the view is covered, so a start on a long tail
@@ -613,7 +636,7 @@ func (m zenModel) screen() string {
 	}
 	end := max(len(rowsOldestFirst)-m.rowsBelowView, 0)
 	visible := rowsOldestFirst[max(end-height, 0):end]
-	rows := make([]string, height-len(visible), height+rowsAboveInput+m.input.Height())
+	rows := make([]string, height-len(visible), height+rowsAboveInput+m.input.Height()+m.rowsBelowInput())
 	rows = append(rows, visible...)
 	shownStatus := m.status
 	if m.copyStatus != "" {
@@ -622,6 +645,9 @@ func (m zenModel) screen() string {
 	rows = append(rows, " "+shownStatus, separatorStyle.Render(strings.Repeat("─", m.width)))
 	for _, inputRow := range strings.Split(m.input.View(), "\n") {
 		rows = append(rows, " "+inputRow)
+	}
+	if m.claudeStatusLine != "" {
+		rows = append(rows, "", " "+ansi.Truncate(m.claudeStatusLine, max(m.width-1, 0), "")+ansi.ResetStyle)
 	}
 	return strings.Join(rows, "\n")
 }
