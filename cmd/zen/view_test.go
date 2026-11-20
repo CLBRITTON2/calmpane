@@ -10,7 +10,6 @@ import (
 	"testing"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 )
@@ -82,24 +81,34 @@ func TestFollowTranscriptNamesTheUndecodableLineAndKeepsReading(t *testing.T) {
 	}
 }
 
-func TestPromptSentMsgKeepsTheTypedTextOnAFailureAndClearsItOnSuccess(t *testing.T) {
+func TestEnterClearsTheInputAtOnceAndAFailedSendPutsTheWholeTextBack(t *testing.T) {
 	cases := []struct {
-		name      string
-		err       error
-		wantInput string
-		wantShown string
+		name       string
+		err        error
+		typedSince string
+		wantInput  string
+		wantShown  string
 	}{
-		{name: "refused while blocked", err: errAgentBlocked, wantInput: "keep me",
+		{name: "refused while blocked", err: errAgentBlocked, wantInput: "keep me\nand this line",
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
-		{name: "herdr failed", err: errors.New("herdr agent prompt failed: exit status 1"), wantInput: "keep me",
-			wantShown: "herdr agent prompt failed: exit status 1"},
+		{name: "herdr failed", err: errors.New("herdr agent prompt failed: exit status 1"),
+			wantInput: "keep me\nand this line", wantShown: "herdr agent prompt failed: exit status 1"},
+		{name: "refused after more typing", err: errAgentBlocked, typedSince: "more",
+			wantInput: "keep me\nand this line\nmore", wantShown: "Claude is waiting for you. Press alt+x to answer."},
 		{name: "sent", err: nil, wantInput: "", wantShown: ""},
+		{name: "sent after more typing", err: nil, typedSince: "more", wantInput: "more", wantShown: ""},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
-			model.input.SetValue("keep me")
-			updated, _ := model.Update(promptSentMsg{err: testCase.err})
+			model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+			model.input.SetValue("keep me\nand this line")
+			sent, _ := model.withKey(pressedKey(tea.KeyEnter))
+			sentModel := sent.(zenModel)
+			if sentModel.input.Value() != "" {
+				t.Fatalf("input after Enter = %q, want it cleared before the send returns", sentModel.input.Value())
+			}
+			sentModel.input.SetValue(testCase.typedSince)
+			updated, _ := sentModel.Update(promptSentMsg{prompt: "keep me\nand this line", err: testCase.err})
 			updatedModel := updated.(zenModel)
 			if updatedModel.input.Value() != testCase.wantInput {
 				t.Errorf("input = %q, want %q", updatedModel.input.Value(), testCase.wantInput)
@@ -127,7 +136,7 @@ func pressedKey(code rune) tea.KeyPressMsg {
 }
 
 func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
 	if !strings.Contains(model.screen(), "prompt 20") {
 		t.Fatalf("screen at the bottom lacks the newest prompt:\n%s", model.screen())
@@ -149,7 +158,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest
 }
 
 func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 3))
 	for range 4 {
 		scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
@@ -165,7 +174,7 @@ func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(
 }
 
 func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
 	scrolledUp, _ := model.Update(pressedKey(tea.KeyUp))
 	upModel := scrolledUp.(zenModel)
@@ -182,7 +191,7 @@ func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 }
 
 func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 30).withEntries([]dialogueEntry{
 		{kind: replyEntry, text: "Old:\n\n```\nold block\n```"},
 		{kind: replyEntry, text: "New:\n\n```go\nfirst()\n```\n\n```go\nfunc f() {\n\treturn \n}\n```\n\nDone."},
@@ -206,7 +215,7 @@ func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T
 }
 
 func TestCtrlYWithNoCodeBlockSaysSoAndCopiesNothing(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12).withEntries([]dialogueEntry{
 		{kind: promptEntry, text: "hello"}, {kind: replyEntry, text: "Use `inline code` only."},
 	})
@@ -233,7 +242,7 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+			model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 			model = model.withSize(60, 12)
 			copied, _ := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 			updated, _ := copied.(zenModel).Update(testCase.statusMsg)
@@ -246,7 +255,7 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 }
 
 func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 40).withEntries([]dialogueEntry{{kind: replyEntry, text: "```sh\nfirst\n```"}})
 	model = model.withEntries([]dialogueEntry{
 		{kind: promptEntry, text: "and then?"}, {kind: replyEntry, text: "```go\nsecond\n```"},
@@ -263,7 +272,7 @@ func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
 }
 
 func modelWithTypedPrompt(prompt string) zenModel {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 20).withEntries([]dialogueEntry{{kind: replyEntry, text: "Ready."}})
 	model.input.SetValue(prompt)
 	return model
@@ -321,7 +330,7 @@ func TestAFailedSendRemovesTheEarlyBandAndShowsTheRefusal(t *testing.T) {
 }
 
 func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T) {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 	scrolledModel := scrolled.(zenModel)
@@ -337,5 +346,131 @@ func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T)
 	if after := recorded.screen(); after != before {
 		t.Errorf("screen moved when the transcript prompt replaced the early band:\nbefore:\n%s\nafter:\n%s", before,
 			after)
+	}
+}
+
+// inputRows are the screen rows under the separator.
+func inputRows(t *testing.T, model zenModel) []string {
+	t.Helper()
+	rows := strings.Split(ansi.Strip(model.screen()), "\n")
+	for index, row := range rows {
+		if strings.HasPrefix(row, "───") {
+			return rows[index+1:]
+		}
+	}
+	t.Fatalf("screen has no separator:\n%s", strings.Join(rows, "\n"))
+	return nil
+}
+
+func TestTheInputWrapsALongLineUnderItsPrompt(t *testing.T) {
+	words := strings.Repeat("wrap these words ", 12)
+	for _, width := range []int{40, 90} {
+		model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+		model = model.withSize(width, 30)
+		model.input.SetValue(words)
+		rows := inputRows(t, model)
+		if len(rows) < 2 {
+			t.Fatalf("width %d: input rows = %q, want the text wrapped onto several rows", width, rows)
+		}
+		if !strings.HasPrefix(rows[0], " > wrap") {
+			t.Errorf("width %d: first input row = %q, want it to start with the prompt", width, rows[0])
+		}
+		joined := ""
+		for index, row := range rows {
+			if rowWidth := ansi.StringWidth(row); rowWidth > width {
+				t.Errorf("width %d: input row %q is %d columns wide", width, row, rowWidth)
+			}
+			if index > 0 && !strings.HasPrefix(row, "   ") {
+				t.Errorf("width %d: wrapped row %q is not indented under the text", width, row)
+			}
+			joined += strings.TrimSpace(strings.TrimPrefix(row, " > ")) + " "
+		}
+		if strings.Join(strings.Fields(joined), " ") != strings.TrimSpace(words) {
+			t.Errorf("width %d: input rows hold %q, want %q", width, joined, words)
+		}
+	}
+}
+
+func TestTheInputGrowsARowAtATimeUpToEightAndTheScreenKeepsItsHeight(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 24).withEntries(numberedPrompts(1, 20))
+	for lineCount := 1; lineCount <= 11; lineCount++ {
+		model.input.SetValue(strings.TrimSuffix(strings.Repeat("line\n", lineCount), "\n"))
+		model = model.withVisibleRowsDrawn()
+		wantRows := min(lineCount, inputMaxRows)
+		if rows := inputRows(t, model); len(rows) != wantRows {
+			t.Errorf("%d lines: %d input rows, want %d", lineCount, len(rows), wantRows)
+		}
+		if screenRows := strings.Count(model.screen(), "\n") + 1; screenRows != 24 {
+			t.Errorf("%d lines: screen has %d rows, want the pane's 24", lineCount, screenRows)
+		}
+	}
+	if value := model.input.Value(); strings.Count(value, "line") != 11 {
+		t.Errorf("input = %q, want all 11 lines kept past the 8 rows shown", value)
+	}
+}
+
+func TestShiftEnterStartsANewLineAndEnterSendsTheTextWithItsNewlines(t *testing.T) {
+	model := zenModel{herdr: herdrCLI{binary: filepath.Join(t.TempDir(), "no-herdr.exe")}, entries: []dialogueEntry{},
+		entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 24)
+	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
+	for _, keyPress := range []tea.KeyPressMsg{{Code: 'o', Text: "o"}, {Code: 'n', Text: "n"}, {Code: 'e', Text: "e"},
+		shiftEnter, {Code: 't', Text: "t"}, {Code: 'w', Text: "w"}, {Code: 'o', Text: "o"}} {
+		updated, _ := model.withKey(keyPress)
+		model = updated.(zenModel)
+	}
+	if value := model.input.Value(); value != "one\ntwo" {
+		t.Fatalf("input = %q, want %q", value, "one\ntwo")
+	}
+	_, sendPrompt := model.withKey(pressedKey(tea.KeyEnter))
+	sent, isPromptSent := sendPrompt().(promptSentMsg)
+	if !isPromptSent || sent.prompt != "one\ntwo" {
+		t.Errorf("Enter sent %+v, want the prompt %q", sent, "one\ntwo")
+	}
+}
+
+func TestUpAndDownMoveTheCursorInAnInputOfSeveralRows(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	model.input.SetValue("first\nsecond")
+	movedUp, _ := model.withKey(pressedKey(tea.KeyUp))
+	movedUpModel := movedUp.(zenModel)
+	if movedUpModel.rowsBelowView != 0 || movedUpModel.input.Line() != 0 {
+		t.Errorf("after Up: rows below view %d, input line %d, want 0 and 0", movedUpModel.rowsBelowView,
+			movedUpModel.input.Line())
+	}
+	movedDown, _ := movedUpModel.withKey(pressedKey(tea.KeyDown))
+	if line := movedDown.(zenModel).input.Line(); line != 1 {
+		t.Errorf("after Down: input line %d, want 1", line)
+	}
+}
+
+// modelWithInputThenEntries sets the input before the entries arrive, so they are drawn under its final height.
+func modelWithInputThenEntries(inputValue string) zenModel {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 24)
+	model.input.SetValue(inputValue)
+	return model.withEntries(numberedPrompts(1, 20))
+}
+
+func TestTheEntriesFillTheRowsTheInputGivesBack(t *testing.T) {
+	model := zenModel{herdr: herdrCLI{binary: filepath.Join(t.TempDir(), "no-herdr.exe")}, entries: []dialogueEntry{},
+		entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 24)
+	// Entries that arrive under a tall input are drawn only down to its top row. A slash command gets no early band
+	// to draw the entries on Enter.
+	model.input.SetValue("/x" + strings.Repeat("\nx", inputMaxRows-1))
+	model = model.withEntries(numberedPrompts(1, 20))
+	for range 8 {
+		erased, _ := model.withKey(pressedKey(tea.KeyBackspace))
+		model = erased.(zenModel)
+	}
+	if screen, want := model.screen(), modelWithInputThenEntries(model.input.Value()).screen(); screen != want {
+		t.Errorf("screen after Backspace shrank the input:\n%s\nwant:\n%s", screen, want)
+	}
+	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
+	if screen, want := sent.(zenModel).screen(), modelWithInputThenEntries("").screen(); screen != want {
+		t.Errorf("screen after Enter cleared the input:\n%s\nwant:\n%s", screen, want)
 	}
 }

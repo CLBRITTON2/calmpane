@@ -6,22 +6,30 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"math"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
 	"time"
 
-	"charm.land/bubbles/v2/textinput"
+	"charm.land/bubbles/v2/key"
+	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 	"charm.land/glamour/v2"
+	"charm.land/lipgloss/v2"
 )
 
 // herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
 const arrowScrollRows = 3
 
-// The status line, the separator and the input line sit under the entries.
-const rowsUnderEntries = 3
+// The status line and the separator sit between the entries and the input.
+const rowsAboveInput = 2
+
+// The input grows a row at a time up to inputMaxRows, then scrolls inside itself.
+const inputMaxRows = 8
+
+const inputPrompt = "> "
 
 type entriesReadMsg struct {
 	entries []dialogueEntry
@@ -67,15 +75,36 @@ type zenModel struct {
 	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
 	// entries until a prompt entry with the same text arrives.
 	earlyPrompts []string
-	input        textinput.Model
+	input        textarea.Model
+}
+
+// Shift+Enter inserts a newline, since Enter sends.
+func NewPromptInput() textarea.Model {
+	input := textarea.New()
+	input.ShowLineNumbers = false
+	input.DynamicHeight = true
+	input.MaxHeight = inputMaxRows
+	// Left at 0, MaxContentHeight would stop the typing at MaxHeight lines instead of scrolling.
+	input.MaxContentHeight = math.MaxInt
+	input.MaxWidth = 0
+	input.SetPromptFunc(len(inputPrompt), func(info textarea.PromptInfo) string {
+		if info.LineNumber == 0 {
+			return inputPrompt
+		}
+		return ""
+	})
+	input.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("shift+enter"))
+	styles := input.Styles()
+	styles.Focused.CursorLine = lipgloss.NewStyle()
+	input.SetStyles(styles)
+	input.Focus()
+	return input
 }
 
 func RunZenView(herdr herdrCLI) error {
 	claudePaneID := os.Getenv(claudePaneEnv)
-	input := textinput.New()
-	input.Focus()
 	model := zenModel{herdr: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
-		input: input}
+		input: NewPromptInput()}
 	transcript, err := openClaudeTranscript(herdr, claudePaneID)
 	model.fatal = err
 	program := tea.NewProgram(model)
@@ -227,7 +256,7 @@ func statusLine(agentStatus string) string {
 }
 
 func (m zenModel) Init() tea.Cmd {
-	return textinput.Blink
+	return textarea.Blink
 }
 
 func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -254,13 +283,17 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = errorStyle.Render("Claude is waiting for you. Press " + toggleKey + " to answer.")
 		case msg.err != nil:
 			m.status = errorStyle.Render(msg.err.Error())
-		default:
-			m.input.SetValue("")
 		}
-		if msg.err != nil {
-			m = m.withEarlyPromptRemoved(strings.TrimSpace(msg.prompt))
+		if msg.err == nil {
+			return m, nil
 		}
-		return m, nil
+		// text typed since Enter stays, after the refused prompt
+		refusedText := msg.prompt
+		if typedSince := m.input.Value(); typedSince != "" {
+			refusedText += "\n" + typedSince
+		}
+		m.input.SetValue(refusedText)
+		return m.withEarlyPromptRemoved(strings.TrimSpace(msg.prompt)), nil
 	case tea.KeyPressMsg:
 		if m.fatal != nil {
 			return m, tea.Quit
@@ -280,9 +313,13 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "pgdown":
 		return m.withRowsBelowViewChangedBy(-m.entriesHeight()), nil
 	case "up":
-		return m.withRowsBelowViewChangedBy(arrowScrollRows), nil
+		if m.input.Height() == 1 {
+			return m.withRowsBelowViewChangedBy(arrowScrollRows), nil
+		}
 	case "down":
-		return m.withRowsBelowViewChangedBy(-arrowScrollRows), nil
+		if m.input.Height() == 1 {
+			return m.withRowsBelowViewChangedBy(-arrowScrollRows), nil
+		}
 	case "end":
 		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
 	case "ctrl+y":
@@ -302,6 +339,8 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "" {
 			return m, nil
 		}
+		m.input.Reset()
+		m = m.withVisibleRowsDrawn()
 		sendPrompt := func() tea.Msg {
 			return promptSentMsg{prompt: prompt, err: m.herdr.PromptAgent(m.claudePaneID, prompt)}
 		}
@@ -314,7 +353,8 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
-	return m, inputCmd
+	// the entries take the rows the input gives up
+	return m.withVisibleRowsDrawn(), inputCmd
 }
 
 // withSize redraws every entry when the width changes, since prompts and markdown wrap to it.
@@ -330,8 +370,8 @@ func (m zenModel) withSize(width int, height int) zenModel {
 	}
 	m.width = width
 	m.height = height
-	// textinput draws its end-of-text cursor one cell past its width
-	m.input.SetWidth(max(width-1-len(m.input.Prompt)-1, 1))
+	// one column of margin on each side
+	m.input.SetWidth(max(width-2, len(inputPrompt)+1))
 	return m.withVisibleRowsDrawn()
 }
 
@@ -403,7 +443,7 @@ func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
 }
 
 func (m zenModel) entriesHeight() int {
-	return max(m.height-rowsUnderEntries, 0)
+	return max(m.height-rowsAboveInput-m.input.Height(), 0)
 }
 
 // withVisibleRowsDrawn draws entries from the newest back until the view is covered, so a start on a long tail
@@ -465,12 +505,15 @@ func (m zenModel) screen() string {
 	}
 	end := max(len(rowsOldestFirst)-m.rowsBelowView, 0)
 	visible := rowsOldestFirst[max(end-height, 0):end]
-	rows := make([]string, height-len(visible), height+rowsUnderEntries)
+	rows := make([]string, height-len(visible), height+rowsAboveInput+m.input.Height())
 	rows = append(rows, visible...)
 	shownStatus := m.status
 	if m.copyStatus != "" {
 		shownStatus = m.copyStatus
 	}
-	rows = append(rows, " "+shownStatus, separatorStyle.Render(strings.Repeat("─", m.width)), " "+m.input.View())
+	rows = append(rows, " "+shownStatus, separatorStyle.Render(strings.Repeat("─", m.width)))
+	for _, inputRow := range strings.Split(m.input.View(), "\n") {
+		rows = append(rows, " "+inputRow)
+	}
 	return strings.Join(rows, "\n")
 }
