@@ -61,7 +61,7 @@ func TestEntryRowsIndentsTabIndentedCodeWithSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "```go\nfunc f() {\n\treturn\n}\n```"}, 60, replyRenderer)
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run:\n\n    func f() {\n    \treturn\n    }"}, 60, replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}

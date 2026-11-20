@@ -12,6 +12,7 @@ import (
 
 // Rosé Pine main, https://rosepinetheme.com/palette, as perusal uses it. The base background is the terminal's.
 const (
+	colorSurface      = "#1f1d2e"
 	colorOverlay      = "#26233a"
 	colorHighlightMed = "#403d52"
 	colorMuted        = "#6e6a86"
@@ -68,26 +69,25 @@ func NewReplyRenderer(width int) (*glamour.TermRenderer, error) {
 
 // EntryRows draws an entry as screen rows, the first row blank to separate it from the entry above.
 func EntryRows(entry dialogueEntry, width int, replyRenderer *glamour.TermRenderer) ([]string, error) {
-	var block string
+	var blockRows []string
 	switch entry.kind {
 	case promptEntry:
 		return append([]string{""}, PromptBandRows(entry.text, width)...), nil
 	case replyEntry:
-		// glamour passes a tab through, and the screen drops it, so Go code would lose its indentation.
-		reply, err := replyRenderer.Render(strings.ReplaceAll(entry.text, "\t", "    "))
+		replyRows, err := ReplyRows(entry.text, width, replyRenderer)
 		if err != nil {
-			return nil, fmt.Errorf("render reply %.80q: %w", entry.text, err)
+			return nil, err
 		}
-		block = strings.Trim(reply, "\n")
+		blockRows = replyRows
 	case questionEntry:
 		lines := []string{questionStyle.Width(max(width-2, 1)).Render(entry.text)}
 		for number, label := range entry.options {
 			lines = append(lines, optionStyle.Width(max(width-2, 1)).Render(fmt.Sprintf("  %d. %s", number+1, label)))
 		}
-		block = strings.Join(lines, "\n")
+		blockRows = strings.Split(strings.Join(lines, "\n"), "\n")
 	}
 	rows := []string{""}
-	for _, row := range strings.Split(block, "\n") {
+	for _, row := range blockRows {
 		rows = append(rows, " "+row)
 	}
 	return rows, nil
