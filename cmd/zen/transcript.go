@@ -39,6 +39,12 @@ type transcriptRecord struct {
 	Message struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	// Claude Code writes a prompt sent while it works as an attachment of type queued_command.
+	Attachment struct {
+		Type        string          `json:"type"`
+		Prompt      json.RawMessage `json:"prompt"`
+		CommandMode string          `json:"commandMode"`
+	} `json:"attachment"`
 }
 
 type contentBlock struct {
@@ -62,6 +68,9 @@ func mayHoldDialogue(line []byte) bool {
 	if bytes.Contains(line, []byte(`"type":"user"`)) && bytes.Contains(line, []byte(`"role":"user","content":"`)) {
 		return true
 	}
+	if bytes.Contains(line, []byte(`"type":"queued_command"`)) && bytes.Contains(line, []byte(`"commandMode":"prompt"`)) {
+		return true
+	}
 	return bytes.Contains(line, []byte(`"type":"assistant"`)) &&
 		(bytes.Contains(line, []byte(`"type":"text"`)) || bytes.Contains(line, []byte(`"name":"AskUserQuestion"`)))
 }
@@ -76,26 +85,38 @@ func DialogueEntries(line []byte) ([]dialogueEntry, error) {
 	}
 	switch record.Type {
 	case "user":
-		contentIsString := bytes.HasPrefix(record.Message.Content, []byte(`"`))
-		if !contentIsString || record.IsMeta {
+		if record.IsMeta {
 			return nil, nil
 		}
-		var prompt string
-		if err := json.Unmarshal(record.Message.Content, &prompt); err != nil {
-			return nil, fmt.Errorf("decode user prompt %.80q: %w", record.Message.Content, err)
+		return promptEntries(record.Message.Content)
+	case "attachment":
+		if record.Attachment.Type != "queued_command" || record.Attachment.CommandMode != "prompt" {
+			return nil, nil
 		}
-		for _, prefix := range notPromptPrefixes {
-			if strings.HasPrefix(prompt, prefix) {
-				return nil, nil
-			}
-		}
-		typedText := strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
-		return []dialogueEntry{{kind: promptEntry, text: typedText}}, nil
+		return promptEntries(record.Attachment.Prompt)
 	case "assistant":
 		return assistantEntries(record.Message.Content)
 	default:
 		return nil, nil
 	}
+}
+
+// promptEntries holds the prompt in content when it is a string the user typed, and nothing for other content.
+func promptEntries(content json.RawMessage) ([]dialogueEntry, error) {
+	if !bytes.HasPrefix(content, []byte(`"`)) {
+		return nil, nil
+	}
+	var prompt string
+	if err := json.Unmarshal(content, &prompt); err != nil {
+		return nil, fmt.Errorf("decode user prompt %.80q: %w", content, err)
+	}
+	for _, prefix := range notPromptPrefixes {
+		if strings.HasPrefix(prompt, prefix) {
+			return nil, nil
+		}
+	}
+	typedText := strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
+	return []dialogueEntry{{kind: promptEntry, text: typedText}}, nil
 }
 
 func assistantEntries(content json.RawMessage) ([]dialogueEntry, error) {

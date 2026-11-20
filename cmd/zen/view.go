@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -41,7 +42,8 @@ type fatalMsg struct {
 }
 
 type promptSentMsg struct {
-	err error
+	prompt string
+	err    error
 }
 
 type zenModel struct {
@@ -62,7 +64,10 @@ type zenModel struct {
 	copyStatus string
 	// newestCodeBlock is the block ctrl+y copies and whose frame carries the hint, nil while no reply holds one.
 	newestCodeBlock *codeBlockPosition
-	input           textinput.Model
+	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
+	// entries until a prompt entry with the same text arrives.
+	earlyPrompts []string
+	input        textinput.Model
 }
 
 func RunZenView(herdr herdrCLI) error {
@@ -252,6 +257,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		default:
 			m.input.SetValue("")
 		}
+		if msg.err != nil {
+			m = m.withEarlyPromptRemoved(strings.TrimSpace(msg.prompt))
+		}
 		return m, nil
 	case tea.KeyPressMsg:
 		if m.fatal != nil {
@@ -294,9 +302,15 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "" {
 			return m, nil
 		}
-		return m, func() tea.Msg {
-			return promptSentMsg{err: m.herdr.PromptAgent(m.claudePaneID, prompt)}
+		sendPrompt := func() tea.Msg {
+			return promptSentMsg{prompt: prompt, err: m.herdr.PromptAgent(m.claudePaneID, prompt)}
 		}
+		// Claude records a slash command as a hidden <command-name> record, which would never replace the band.
+		bandText := strings.TrimSpace(prompt)
+		if bandText == "" || strings.HasPrefix(bandText, "/") {
+			return m, sendPrompt
+		}
+		return m.withEarlyPromptAdded(bandText), sendPrompt
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
@@ -345,7 +359,42 @@ func (m zenModel) withEntries(entries []dialogueEntry) zenModel {
 			m.rowsBelowView += len(m.entryRows[index])
 		}
 	}
+	for _, entry := range entries {
+		if entry.kind == promptEntry {
+			m = m.withEarlyPromptRemoved(entry.text)
+		}
+	}
 	return m.withVisibleRowsDrawn()
+}
+
+// withEarlyPromptAdded keeps a view scrolled up on the rows it shows, as withEntries does.
+func (m zenModel) withEarlyPromptAdded(prompt string) zenModel {
+	m.earlyPrompts = append(slices.Clone(m.earlyPrompts), prompt)
+	if m.rowsBelowView > 0 {
+		m.rowsBelowView += len(PromptEntryRows(prompt, m.width))
+	}
+	return m.withVisibleRowsDrawn()
+}
+
+// withEarlyPromptRemoved removes the oldest early band with the prompt's text, if there is one.
+func (m zenModel) withEarlyPromptRemoved(prompt string) zenModel {
+	index := slices.Index(m.earlyPrompts, prompt)
+	if index < 0 {
+		return m
+	}
+	m.earlyPrompts = slices.Delete(slices.Clone(m.earlyPrompts), index, index+1)
+	if m.rowsBelowView > 0 {
+		m.rowsBelowView = max(m.rowsBelowView-len(PromptEntryRows(prompt, m.width)), 0)
+	}
+	return m.withVisibleRowsDrawn()
+}
+
+func (m zenModel) earlyPromptRows() []string {
+	rows := []string{}
+	for _, prompt := range m.earlyPrompts {
+		rows = append(rows, PromptEntryRows(prompt, m.width)...)
+	}
+	return rows
 }
 
 func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
@@ -364,7 +413,7 @@ func (m zenModel) withVisibleRowsDrawn() zenModel {
 		return m
 	}
 	rowsNeeded := m.rowsBelowView + m.entriesHeight()
-	rowsDrawn := 0
+	rowsDrawn := len(m.earlyPromptRows())
 	for index := len(m.entries) - 1; index >= 0 && rowsDrawn < rowsNeeded; index-- {
 		m = m.withEntryDrawn(index)
 		rowsDrawn += len(m.entryRows[index])
@@ -410,7 +459,7 @@ func (m zenModel) View() tea.View {
 func (m zenModel) screen() string {
 	height := m.entriesHeight()
 	rowsNeeded := m.rowsBelowView + height
-	rowsOldestFirst := []string{}
+	rowsOldestFirst := m.earlyPromptRows()
 	for index := len(m.entries) - 1; index >= 0 && len(rowsOldestFirst) < rowsNeeded; index-- {
 		rowsOldestFirst = append(append([]string{}, m.entryRows[index]...), rowsOldestFirst...)
 	}

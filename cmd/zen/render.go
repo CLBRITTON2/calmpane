@@ -73,7 +73,7 @@ func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer 
 	var blockRows []string
 	switch entry.kind {
 	case promptEntry:
-		return append([]string{""}, PromptBandRows(entry.text, width)...), nil
+		return PromptEntryRows(entry.text, width), nil
 	case replyEntry:
 		replyRows, err := ReplyRows(entry.text, copyHintBlock, width, replyRenderer)
 		if err != nil {
@@ -92,6 +92,10 @@ func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer 
 		rows = append(rows, " "+row)
 	}
 	return rows, nil
+}
+
+func PromptEntryRows(prompt string, width int) []string {
+	return append([]string{""}, PromptBandRows(prompt, width)...)
 }
 
 // PromptBandRows draws a prompt on a band the full width, with a blank band row above and below the text.

@@ -61,6 +61,33 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 			line: `{"type":"attachment","attachment":{"type":"text","text":"file body"}}`,
 		},
 		{
+			name: "prompt queued while Claude works shown",
+			line: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"also check the logs",` +
+				`"commandMode":"prompt","origin":{"kind":"human"}}}`,
+			want: []dialogueEntry{{kind: promptEntry, text: "also check the logs"}},
+		},
+		{
+			name: "queued pasted_content prompt shown as the text it holds",
+			line: `{"type":"attachment","attachment":{"type":"queued_command",` +
+				`"prompt":"<pasted_content id=\"a1b2\">\nbuild log line\n</pasted_content id=\"a1b2\">\n\nwhy","commandMode":"prompt"}}`,
+			want: []dialogueEntry{{kind: promptEntry, text: "build log line\n\nwhy"}},
+		},
+		{
+			name: "queued agent message hidden",
+			line: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"<agent-message from=\"a1\">done",` +
+				`"commandMode":"prompt"}}`,
+		},
+		{
+			name: "queued task notification hidden",
+			line: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"<task-notification>done",` +
+				`"commandMode":"task-notification"}}`,
+		},
+		{
+			name: "queued task notification hidden even when its prompt is plain text",
+			line: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"agent finished",` +
+				`"commandMode":"task-notification"}}`,
+		},
+		{
 			name: "system record hidden",
 			line: `{"type":"system","subtype":"info","content":"compacted"}`,
 		},

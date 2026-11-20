@@ -261,3 +261,81 @@ func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
 		t.Errorf("rules with the hint = %q, want only the go block's", hintedRules)
 	}
 }
+
+func modelWithTypedPrompt(prompt string) zenModel {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model = model.withSize(60, 20).withEntries([]dialogueEntry{{kind: replyEntry, text: "Ready."}})
+	model.input.SetValue(prompt)
+	return model
+}
+
+func TestEnterShowsThePromptBandAtOnceAndTheTranscriptPromptTakesItsPlace(t *testing.T) {
+	sent, sendPrompt := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
+	if sendPrompt == nil {
+		t.Fatal("Enter returned no command to send the prompt")
+	}
+	if screenText := ansi.Strip(sent.(zenModel).screen()); !strings.Contains(screenText, "▌ rename the widget") {
+		t.Fatalf("screen after Enter lacks the prompt's band:\n%s", screenText)
+	}
+	delivered, _ := sent.Update(promptSentMsg{prompt: "rename the widget", err: nil})
+	sentModel := delivered.(zenModel)
+	// a reply written before Claude records the prompt goes above the early band
+	withReply := sentModel.withEntries([]dialogueEntry{{kind: replyEntry, text: "Still on the last step."}})
+	replyText := ansi.Strip(withReply.screen())
+	replyAt := strings.Index(replyText, "Still on the last step.")
+	bandAt := strings.Index(replyText, "▌ rename the widget")
+	if replyAt < 0 || bandAt < 0 || replyAt > bandAt {
+		t.Errorf("screen lacks the reply or the early band, or has the reply under the band:\n%s", replyText)
+	}
+	recorded := withReply.withEntries([]dialogueEntry{{kind: promptEntry, text: "rename the widget"}})
+	recordedText := ansi.Strip(recorded.screen())
+	if count := strings.Count(recordedText, "rename the widget"); count != 1 {
+		t.Errorf("screen shows the prompt %d times after the transcript records it, want 1:\n%s", count, recordedText)
+	}
+	if len(recorded.earlyPrompts) != 0 {
+		t.Errorf("earlyPrompts = %q, want none once the transcript holds the prompt", recorded.earlyPrompts)
+	}
+}
+
+func TestASlashCommandGetsNoEarlyBand(t *testing.T) {
+	sent, sendPrompt := modelWithTypedPrompt("/compact").withKey(pressedKey(tea.KeyEnter))
+	if sendPrompt == nil {
+		t.Fatal("Enter returned no command to send the slash command")
+	}
+	if screenText := ansi.Strip(sent.(zenModel).screen()); strings.Contains(screenText, "▌ /compact") {
+		t.Errorf("screen after Enter on a slash command shows a band:\n%s", screenText)
+	}
+}
+
+func TestAFailedSendRemovesTheEarlyBandAndShowsTheRefusal(t *testing.T) {
+	sent, _ := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
+	refused, _ := sent.(zenModel).Update(promptSentMsg{prompt: "rename the widget", err: errAgentBlocked})
+	refusedModel := refused.(zenModel)
+	screenText := ansi.Strip(refusedModel.screen())
+	if strings.Contains(screenText, "▌ rename the widget") {
+		t.Errorf("screen after a refused send still shows the early band:\n%s", screenText)
+	}
+	if !strings.Contains(screenText, "Claude is waiting for you. Press alt+x to answer.") {
+		t.Errorf("screen after a refused send lacks the refusal:\n%s", screenText)
+	}
+}
+
+func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
+	scrolledModel := scrolled.(zenModel)
+	before := scrolledModel.screen()
+	scrolledModel.input.SetValue("prompt 21")
+	sent, _ := scrolledModel.withKey(pressedKey(tea.KeyEnter))
+	delivered, _ := sent.Update(promptSentMsg{prompt: "prompt 21", err: nil})
+	sentModel := delivered.(zenModel)
+	if after := sentModel.screen(); after != before {
+		t.Errorf("screen moved when the early band came:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	recorded := sentModel.withEntries(numberedPrompts(21, 1))
+	if after := recorded.screen(); after != before {
+		t.Errorf("screen moved when the transcript prompt replaced the early band:\nbefore:\n%s\nafter:\n%s", before,
+			after)
+	}
+}
