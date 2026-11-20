@@ -16,7 +16,8 @@ import (
 	"charm.land/glamour/v2"
 )
 
-const wheelScrollRows = 3
+// herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
+const arrowScrollRows = 3
 
 // The status line, the separator and the input line sit under the entries.
 const rowsUnderEntries = 3
@@ -250,14 +251,6 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		}
 		return m.withKey(msg)
-	case tea.MouseWheelMsg:
-		switch msg.Mouse().Button {
-		case tea.MouseWheelUp:
-			return m.withRowsBelowViewChangedBy(wheelScrollRows), nil
-		case tea.MouseWheelDown:
-			return m.withRowsBelowViewChangedBy(-wheelScrollRows), nil
-		}
-		return m, nil
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
@@ -270,6 +263,10 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m.withRowsBelowViewChangedBy(m.entriesHeight()), nil
 	case "pgdown":
 		return m.withRowsBelowViewChangedBy(-m.entriesHeight()), nil
+	case "up":
+		return m.withRowsBelowViewChangedBy(arrowScrollRows), nil
+	case "down":
+		return m.withRowsBelowViewChangedBy(-arrowScrollRows), nil
 	case "end":
 		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
 	case "enter":
@@ -370,7 +367,6 @@ func (m zenModel) View() tea.View {
 		view = tea.NewView(m.screen())
 	}
 	view.AltScreen = true
-	view.MouseMode = tea.MouseModeCellMotion
 	return view
 }
 

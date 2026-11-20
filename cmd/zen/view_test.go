@@ -164,19 +164,19 @@ func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(
 	}
 }
 
-func TestMouseWheelUpScrollsBackThreeRowsAndWheelDownReturns(t *testing.T) {
+func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
-	wheeledUp, _ := model.Update(tea.MouseWheelMsg{Button: tea.MouseWheelUp})
-	upModel := wheeledUp.(zenModel)
-	if upModel.rowsBelowView != wheelScrollRows {
-		t.Errorf("rows below the view after wheel up = %d, want %d", upModel.rowsBelowView, wheelScrollRows)
+	scrolledUp, _ := model.Update(pressedKey(tea.KeyUp))
+	upModel := scrolledUp.(zenModel)
+	if upModel.rowsBelowView != arrowScrollRows {
+		t.Errorf("rows below the view after Up = %d, want %d", upModel.rowsBelowView, arrowScrollRows)
 	}
 	if strings.Contains(upModel.screen(), "prompt 20") {
-		t.Errorf("screen after wheel up still shows the newest prompt:\n%s", upModel.screen())
+		t.Errorf("screen after Up still shows the newest prompt:\n%s", upModel.screen())
 	}
-	wheeledDown, _ := upModel.Update(tea.MouseWheelMsg{Button: tea.MouseWheelDown})
-	if rowsBelowView := wheeledDown.(zenModel).rowsBelowView; rowsBelowView != 0 {
-		t.Errorf("rows below the view after wheel down = %d, want 0", rowsBelowView)
+	scrolledDown, _ := upModel.Update(pressedKey(tea.KeyDown))
+	if rowsBelowView := scrolledDown.(zenModel).rowsBelowView; rowsBelowView != 0 {
+		t.Errorf("rows below the view after Down = %d, want 0", rowsBelowView)
 	}
 }
