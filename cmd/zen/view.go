@@ -24,9 +24,6 @@ import (
 // herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
 const arrowScrollRows = 3
 
-// A blank row, the status line and the separator sit between the entries and the input.
-const rowsAboveInput = 3
-
 // The input grows a row at a time up to inputMaxRows, then scrolls inside itself.
 const inputMaxRows = 8
 
@@ -619,7 +616,25 @@ func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
 }
 
 func (m zenModel) entriesHeight() int {
-	return max(m.height-rowsAboveInput-m.input.Height()-m.rowsBelowInput(), 0)
+	return max(m.height-m.rowsAboveInput()-m.input.Height()-m.rowsBelowInput(), 0)
+}
+
+// A shown status gets a blank row above it, between it and the newest entry.
+func (m zenModel) rowsAboveInput() int {
+	if m.shownStatus() == "" {
+		return 2
+	}
+	return 3
+}
+
+func (m zenModel) shownStatus() string {
+	if m.copyStatus != "" {
+		return m.copyStatus
+	}
+	if m.status != "" {
+		return m.status
+	}
+	return statusLine(m.agentStatus, m.turn, m.now, m.width)
 }
 
 func (m zenModel) rowsBelowInput() int {
@@ -688,17 +703,14 @@ func (m zenModel) screen() string {
 	}
 	end := max(len(rowsOldestFirst)-m.rowsBelowView, 0)
 	visible := rowsOldestFirst[max(end-height, 0):end]
-	rows := make([]string, height-len(visible), height+rowsAboveInput+m.input.Height()+m.rowsBelowInput())
+	rows := make([]string, height-len(visible), height+m.rowsAboveInput()+m.input.Height()+m.rowsBelowInput())
 	rows = append(rows, visible...)
-	shownStatus := m.status
-	if shownStatus == "" {
-		shownStatus = statusLine(m.agentStatus, m.turn, m.now, m.width)
-	}
-	if m.copyStatus != "" {
-		shownStatus = m.copyStatus
+	shownStatus := m.shownStatus()
+	if shownStatus != "" {
+		rows = append(rows, "")
 	}
 	separator := separatorStyle.Render(strings.Repeat("─", m.width))
-	rows = append(rows, "", " "+shownStatus, separator)
+	rows = append(rows, " "+shownStatus, separator)
 	for _, inputRow := range strings.Split(m.input.View(), "\n") {
 		rows = append(rows, " "+inputRow)
 	}

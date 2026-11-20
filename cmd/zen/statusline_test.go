@@ -60,6 +60,17 @@ func TestABlankRowSeparatesTheNewestEntryFromTheWorkingRow(t *testing.T) {
 	}
 }
 
+func TestWithNoStatusTheNewestEntrySitsRightAboveTheEmptyStatusRow(t *testing.T) {
+	model := modelWithClaudeStatusLine(roseLocation)
+	rows := strings.Split(model.screen(), "\n")
+	if newest := ansi.Strip(rows[6]); !strings.Contains(newest, "prompt 20") {
+		t.Errorf("row 7 = %q, want the newest prompt", newest)
+	}
+	if statusRow := rows[7]; statusRow != " " {
+		t.Errorf("row 8 = %q, want the empty status row", statusRow)
+	}
+}
+
 func TestWithNoClaudeStatusLineTheInputIsTheLastRow(t *testing.T) {
 	neverShown := modelWithClaudeStatusLine("")
 	rows := strings.Split(ansi.Strip(neverShown.screen()), "\n")
