@@ -142,6 +142,12 @@ func (h herdrCLI) FocusAgent(paneID string) error {
 	return err
 }
 
+// StyledScreen keeps the SGR sequences, which tell a dimmed placeholder apart from typed text.
+func (h herdrCLI) StyledScreen(paneID string) (string, error) {
+	output, err := h.run("pane read", paneID, "--source", "visible", "--format", "ansi")
+	return string(output), err
+}
+
 func (h herdrCLI) SendText(paneID string, text string) error {
 	_, err := h.run("pane send-text", paneID, text)
 	return err

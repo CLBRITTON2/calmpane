@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -15,7 +16,8 @@ import (
 )
 
 // fakeHerdrDirEnv makes the test binary act as herdr's CLI on the panes in panes.json under the directory it names,
-// logging each command line to calls.log there.
+// logging each command line to calls.log there. A pane's screen is the file FakeScreenFile names, and send-keys
+// replaces it with the file named with .after-keys added when there is one.
 const fakeHerdrDirEnv = "ZEN_FAKE_HERDR_DIR"
 
 func TestMain(m *testing.M) {
@@ -51,6 +53,19 @@ func RunFakeHerdr(fakeDir string, arguments []string) error {
 	}
 	command := strings.Join(arguments[:2], " ")
 	switch command {
+	case "pane read":
+		screen, err := os.ReadFile(FakeScreenFile(fakeDir, arguments[2]))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		_, err = os.Stdout.Write(screen)
+		return err
+	case "pane send-keys":
+		screenFile := FakeScreenFile(fakeDir, arguments[2])
+		if err := os.Rename(screenFile+".after-keys", screenFile); err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		return nil
 	case "pane list":
 		reply, err := json.Marshal(map[string]map[string][]herdrPane{"result": {"panes": panes}})
 		if err != nil {
@@ -113,6 +128,28 @@ func fakeHerdr(t *testing.T, panes []herdrPane) (herdrCLI, zenMode, func() []str
 	}
 	mode := zenMode{stateDir: t.TempDir(), session: "zentest", mutexName: `Local\zen-test.` + t.Name()}
 	return herdrCLI{binary: testBinary, pluginID: "zen-test"}, mode, calls
+}
+
+func FakeScreenFile(fakeDir string, paneID string) string {
+	return filepath.Join(fakeDir, "screen."+strings.ReplaceAll(paneID, ":", "-"))
+}
+
+// ShowOnFakeScreen puts the testdata capture on paneID's screen, and afterKeysCapture there once keys are sent. An
+// empty afterKeysCapture leaves the screen as it is.
+func ShowOnFakeScreen(t *testing.T, paneID string, capture string, afterKeysCapture string) {
+	screenFile := FakeScreenFile(os.Getenv(fakeHerdrDirEnv), paneID)
+	for file, capture := range map[string]string{screenFile: capture, screenFile + ".after-keys": afterKeysCapture} {
+		if capture == "" {
+			continue
+		}
+		screen, err := os.ReadFile(filepath.Join("testdata", capture))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(file, screen, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
 }
 
 func claudePane(paneID string, focused bool) herdrPane {
@@ -216,8 +253,9 @@ func TestFocusHooksRunTogetherOpenOneZenPaneForTheClaudePane(t *testing.T) {
 	}
 }
 
-func TestAltXTurnsZenModeOnAndOpensAndMarksTheFocusedClaudePanesZenViewWithoutAStaleDraft(t *testing.T) {
+func TestAltXTurnsZenModeOnMovesClaudesDraftAfterTheZenDraftAndOpensAndMarksTheZenView(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
+	ShowOnFakeScreen(t, "w1:p1", "claude-input-one-row.ansi", "claude-input-empty.ansi")
 	if err := os.WriteFile(mode.DraftFile("w1:p1"), []byte("left by a closed zen pane"), 0o644); err != nil {
 		t.Fatal(err)
 	}
@@ -229,6 +267,9 @@ func TestAltXTurnsZenModeOnAndOpensAndMarksTheFocusedClaudePanesZenViewWithoutAS
 	}
 	want := []string{
 		"pane list",
+		"pane read w1:p1 --source visible --format ansi",
+		"pane send-keys w1:p1 ctrl+u ctrl+u",
+		"pane read w1:p1 --source visible --format ansi",
 		"plugin pane open --plugin zen-test --entrypoint zen --placement zoomed --target-pane w1:p1 --env " +
 			"ZEN_CLAUDE_PANE=w1:p1 --focus",
 		"pane report-metadata w1:z1 --source zen-test --token claude_pane=w1:p1",
@@ -236,8 +277,80 @@ func TestAltXTurnsZenModeOnAndOpensAndMarksTheFocusedClaudePanesZenViewWithoutAS
 	if got := calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
 	}
+	assertDraft(t, mode.DraftFile("w1:p1"), "left by a closed zen pane\nmove this draft")
+}
+
+func assertDraft(t *testing.T, draftFile string, want string) {
+	draft, err := os.ReadFile(draftFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(draft) != want {
+		t.Errorf("draft = %q, want %q", draft, want)
+	}
+}
+
+func TestAltXMovesAWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
+	ShowOnFakeScreen(t, "w1:p1", "claude-input-wrapped.ansi", "claude-input-empty.ansi")
+	if err := ToggleZenMode(herdr, mode); err != nil {
+		t.Fatal(err)
+	}
+	if got := calls(); !slices.Contains(got, "pane send-keys w1:p1 ctrl+u ctrl+u ctrl+u ctrl+u") {
+		t.Errorf("herdr calls = %q, want ctrl+u twice per row of the box", got)
+	}
+	assertDraft(t, mode.DraftFile("w1:p1"), "this unsent draft is long enough to wrap across two rows of the Claude "+
+		"input box, so pane read drops the space at the wrap")
+}
+
+func TestAltXSendsNoKeyAndMovesNothingFromAPlaceholderAnEmptyBoxOrABlockedClaude(t *testing.T) {
+	blockedPane := claudePane("w1:p1", true)
+	blockedPane.AgentStatus = "blocked"
+	cases := []struct {
+		name    string
+		pane    herdrPane
+		capture string
+	}{
+		{name: "placeholder", pane: claudePane("w1:p1", true), capture: "claude-input-placeholder.ansi"},
+		{name: "empty box", pane: claudePane("w1:p1", true), capture: "claude-input-empty.ansi"},
+		{name: "blocked", pane: blockedPane, capture: "claude-input-one-row.ansi"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			herdr, mode, calls := fakeHerdr(t, []herdrPane{testCase.pane})
+			ShowOnFakeScreen(t, "w1:p1", testCase.capture, "")
+			if err := ToggleZenMode(herdr, mode); err != nil {
+				t.Fatal(err)
+			}
+			for _, call := range calls() {
+				if strings.HasPrefix(call, "pane send-keys") {
+					t.Errorf("herdr calls = %q, want no send-keys", calls())
+				}
+			}
+			if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
+				t.Errorf("draft file: %v, want none", err)
+			}
+		})
+	}
+}
+
+func TestAltXFailsNamingThePaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterTheClearKeys(t *testing.T) {
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
+	ShowOnFakeScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
+	err := ToggleZenMode(herdr, mode)
+	if err == nil || !strings.Contains(err.Error(), "pane w1:p1 still holds text") {
+		t.Errorf("ToggleZenMode = %v, want an error naming pane w1:p1", err)
+	}
+	if isOn, err := mode.IsOn(); err != nil || isOn {
+		t.Errorf("IsOn = %v, %v, want false", isOn, err)
+	}
 	if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
-		t.Errorf("stale draft file: %v, want it removed", err)
+		t.Errorf("draft file: %v, want none", err)
+	}
+	for _, call := range calls() {
+		if strings.HasPrefix(call, "plugin pane open") {
+			t.Errorf("herdr calls = %q, want no zen pane opened", calls())
+		}
 	}
 }
 

@@ -127,8 +127,10 @@ func RunZenView(herdr herdrCLI) error {
 		input: NewPromptInput()}
 	transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(herdr, claudePaneID)
 	mode, modeErr := ZenModeOfPlugin(herdr.pluginID)
-	model.fatal = errors.Join(err, modeErr)
-	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: ""})
+	draft, draftErr := SavedDraft(mode.DraftFile(claudePaneID))
+	model.fatal = errors.Join(err, modeErr, draftErr)
+	model.input.SetValue(draft)
+	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: draft})
 	if transcript != nil {
 		go func() {
 			err := followTranscript(transcript, program.Send)

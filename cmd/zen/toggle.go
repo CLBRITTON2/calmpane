@@ -69,7 +69,10 @@ func ToggleZenMode(herdr herdrCLI, mode zenMode) error {
 		if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
 			return fmt.Errorf("turn zen mode on: %w", err)
 		}
-		return OpenOrShowZenPaneOfFocusedPane(herdr, mode, panes)
+		if err := OpenOrShowZenPaneOfFocusedPane(herdr, mode, panes); err != nil {
+			return errors.Join(err, os.Remove(mode.ModeFile()))
+		}
+		return nil
 	})
 }
 
@@ -96,9 +99,12 @@ func OpenOrShowZenPaneOfFocusedPane(herdr herdrCLI, mode zenMode, panes []herdrP
 	}
 	switch action.Kind {
 	case zenPaneActionOpen:
-		// a draft left by a zen pane closed some other way than alt+x does not belong to the new zen view
-		if err := os.Remove(mode.DraftFile(action.ClaudePaneID)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return fmt.Errorf("remove a stale zen draft: %w", err)
+		claudePane, err := FocusedPane(panes)
+		if err != nil {
+			return err
+		}
+		if err := MoveAgentInputIntoDraft(herdr, claudePane, mode.DraftFile(action.ClaudePaneID)); err != nil {
+			return err
 		}
 		return herdr.OpenAndMarkZenPane(action.ClaudePaneID)
 	case zenPaneActionShow:

@@ -1,0 +1,34 @@
+
+[0m[38;5;15m● [0mThe command is running in the background, since this shell doesn't allow a
+  foreground [0m[38;2;177;185;249msleep[0m. I'll say finished once it exits.
+ 
+[0m[2m[38;5;7m✻ Worked for 5s · done 3:25 PM[0m
+
+[0m[38;5;10m● [0mBackground command "Wait 30 seconds then print slept" completed (exit code 0)
+
+[0m[38;5;15m● [0mfinished
+
+[0m[2m[38;5;7m✻ Sautéed for 1s · done 3:25 PM[0m
+
+[0m[38;5;7m[48;2;46;43;64m❯ [0m[38;5;15m[48;2;46;43;64mRun the Bash command ping -n 25 127.0.0.1 in the foreground (not in the [0m[48;2;46;43;64m          [0m
+[0m[48;2;46;43;64m  [0m[38;5;15m[48;2;46;43;64mbackground) and then reply with the single word finished.[0m[48;2;46;43;64m                         [0m
+
+  [0m[2m[38;5;7mNo result recorded for [0m[1m[38;5;7m1[0m[2m[38;5;7m call [0m
+[0m[2m[38;5;7m  ⎿  $ ping -n 25 127.0.0.1[0m
+[0m[2m[38;5;7m  ⎿  Interrupted · What should Claude do instead?[0m
+
+[0m[38;5;7m[48;2;46;43;64m❯ [0m[38;5;15m[48;2;46;43;64mRun the Bash command ping -n 20 127.0.0.1 in the foreground (not in the [0m[48;2;46;43;64m          [0m
+[0m[48;2;46;43;64m  [0m[38;5;15m[48;2;46;43;64mbackground) and then reply with the single word finished.[0m[48;2;46;43;64m                         [0m
+
+  [0m[2m[38;5;7mRan [0m[1m[38;5;7m1[0m[2m[38;5;7m shell command [0m
+
+[0m[38;5;15m● [0mfinished
+
+[0m[2m[38;5;7m✻ Crunched for 24s · done 3:31 PM[0m
+
+[0m[38;5;7m────────────────────────────────────────────────────────────────────────────────────[0m
+❯ this unsent draft is long enough to wrap across two rows of the Claude input
+  box, so pane read drops the space at the wrap
+[0m[38;5;7m────────────────────────────────────────────────────────────────────────────────────[0m
+  [0m[38;2;235;188;186magents[0m[2m[38;5;7m [0m[38;2;196;167;231m main[0m[38;2;144;140;170m  │  [0m[38;2;156;207;216mOpus 5.5[0m[38;2;144;140;170m  │  [0m[38;2;196;167;231m[0m[2m[38;5;7m [0m[38;2;224;222;244m35%[0m[38;2;144;140;170m 3h18m  │  [0m[38;2;196;167;231m[0m[2m[38;5;7m [0m[38;2;224;222;244m28%[0m[38;2;144;140;170m  │  [0m[38;2;196;167;231m[0m[2m[38;5;7m [0m[38;2;224;222;244m21%[0m[38;2;144;140;170m 42k/200k  │  [0m[38;2;196;167;231m[0m[2m[38;5;7m [0m[38;2;144;140;170m3…[0m
+  [0m[38;5;11m⏵⏵ auto mode on[0m[2m[38;5;7m (shift+tab to cycle)[0m
