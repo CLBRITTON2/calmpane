@@ -98,15 +98,14 @@ func PromptEntryRows(prompt string, width int) []string {
 	return append([]string{""}, PromptBandRows(prompt, width)...)
 }
 
-// PromptBandRows draws a prompt on a band the full width, with a blank band row above and below the text.
+// PromptBandRows draws a prompt on a band the full width, one band row per text row.
 func PromptBandRows(prompt string, width int) []string {
-	blankRow := bandStyle.Render(strings.Repeat(" ", width))
 	// one column of margin on each side of the marker and the text
 	textWidth := max(width-1-lipgloss.Width(bandMarker), 1)
 	wrapped := bandTextStyle.Width(textWidth).PaddingRight(1).Render(strings.ReplaceAll(prompt, "\r\n", "\n"))
-	rows := []string{blankRow}
+	rows := []string{}
 	for _, textRow := range strings.Split(wrapped, "\n") {
 		rows = append(rows, bandStyle.Render(" ")+bandMarkerStyle.Render(bandMarker)+textRow)
 	}
-	return append(rows, blankRow)
+	return rows
 }

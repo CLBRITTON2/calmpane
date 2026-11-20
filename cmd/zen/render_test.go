@@ -14,14 +14,50 @@ func TestPromptBandRowsFillTheWidthWhenThePromptWraps(t *testing.T) {
 		"second line\twith a tab"
 	for _, width := range []int{40, 100} {
 		rows := PromptBandRows(prompt, width)
-		if len(rows) < 4 {
-			t.Fatalf("width %d: %d rows, want a blank row, the text rows and a blank row", width, len(rows))
+		if len(rows) < 2 {
+			t.Fatalf("width %d: %d rows, want a row for each line of the prompt", width, len(rows))
 		}
 		for index, row := range rows {
 			if rowWidth := lipgloss.Width(row); rowWidth != width {
 				t.Errorf("width %d: row %d is %d columns wide: %q", width, index, rowWidth, row)
 			}
 		}
+	}
+}
+
+func plainRows(rows []string) []string {
+	plain := []string{}
+	for _, row := range rows {
+		plain = append(plain, strings.TrimRight(ansi.Strip(row), " "))
+	}
+	return plain
+}
+
+func TestAOneLinePromptIsOneBandRowWithABlankRowBeforeTheReply(t *testing.T) {
+	replyRenderer, err := NewReplyRenderer(40)
+	if err != nil {
+		t.Fatalf("NewReplyRenderer: %v", err)
+	}
+	promptRows, err := EntryRows(dialogueEntry{kind: promptEntry, text: "ok"}, -1, 40, replyRenderer)
+	if err != nil {
+		t.Fatalf("EntryRows of the prompt: %v", err)
+	}
+	replyRows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Done."}, -1, 40, replyRenderer)
+	if err != nil {
+		t.Fatalf("EntryRows of the reply: %v", err)
+	}
+	got := plainRows(append(promptRows, replyRows...))
+	want := []string{"", " ▌ ok", "", " Done."}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("rows = %q, want %q", got, want)
+	}
+}
+
+func TestAWrappedPromptIsOneBandRowPerTextRow(t *testing.T) {
+	got := plainRows(PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", 30))
+	want := []string{" ▌ rename the widget and then", " ▌ rebuild the whole view", " ▌ second", " ▌ third"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("band rows = %q, want %q", got, want)
 	}
 }
 
@@ -47,10 +83,7 @@ func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}
-	plain := []string{}
-	for _, row := range rows {
-		plain = append(plain, strings.TrimRight(ansi.Strip(row), " "))
-	}
+	plain := plainRows(rows)
 	want := []string{"", " Which color?", "   1. Red (Recommended)", "   2. Blue"}
 	if !reflect.DeepEqual(plain, want) {
 		t.Errorf("question rows = %q, want %q", plain, want)
