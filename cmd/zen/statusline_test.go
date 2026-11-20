@@ -45,6 +45,21 @@ func TestTheClaudeStatusLineIsDrawnUnderASeparatorClosingTheInputWithItsColorsAn
 	}
 }
 
+func TestABlankRowSeparatesTheNewestEntryFromTheWorkingRow(t *testing.T) {
+	model := modelWithClaudeStatusLine(roseLocation)
+	model.agentStatus = "working"
+	rows := strings.Split(model.screen(), "\n")
+	if newest := ansi.Strip(rows[5]); !strings.Contains(newest, "prompt 20") {
+		t.Errorf("row 6 = %q, want the newest prompt", newest)
+	}
+	if blank := rows[6]; blank != "" {
+		t.Errorf("row 7 = %q, want a blank row", blank)
+	}
+	if working := ansi.Strip(rows[7]); working != " Working..." {
+		t.Errorf("row 8 = %q, want the working row", working)
+	}
+}
+
 func TestWithNoClaudeStatusLineTheInputIsTheLastRow(t *testing.T) {
 	neverShown := modelWithClaudeStatusLine("")
 	rows := strings.Split(ansi.Strip(neverShown.screen()), "\n")

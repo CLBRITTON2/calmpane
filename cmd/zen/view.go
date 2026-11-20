@@ -24,8 +24,8 @@ import (
 // herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
 const arrowScrollRows = 3
 
-// The status line and the separator sit between the entries and the input.
-const rowsAboveInput = 2
+// A blank row, the status line and the separator sit between the entries and the input.
+const rowsAboveInput = 3
 
 // The input grows a row at a time up to inputMaxRows, then scrolls inside itself.
 const inputMaxRows = 8
@@ -698,7 +698,7 @@ func (m zenModel) screen() string {
 		shownStatus = m.copyStatus
 	}
 	separator := separatorStyle.Render(strings.Repeat("─", m.width))
-	rows = append(rows, " "+shownStatus, separator)
+	rows = append(rows, "", " "+shownStatus, separator)
 	for _, inputRow := range strings.Split(m.input.View(), "\n") {
 		rows = append(rows, " "+inputRow)
 	}
