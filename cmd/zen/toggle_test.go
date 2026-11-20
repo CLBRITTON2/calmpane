@@ -66,6 +66,18 @@ func RunFakeHerdr(fakeDir string, arguments []string) error {
 			return err
 		}
 		return nil
+	case "pane get":
+		for _, pane := range panes {
+			if pane.PaneID == arguments[2] {
+				reply, err := json.Marshal(map[string]map[string]herdrPane{"result": {"pane": pane}})
+				if err != nil {
+					return err
+				}
+				_, err = os.Stdout.Write(reply)
+				return err
+			}
+		}
+		return fmt.Errorf("pane %s not found", arguments[2])
 	case "pane list":
 		reply, err := json.Marshal(map[string]map[string][]herdrPane{"result": {"panes": panes}})
 		if err != nil {

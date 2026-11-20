@@ -132,29 +132,43 @@ func RunZenView(herdr herdrCLI) error {
 	claudePaneID := os.Getenv(claudePaneEnv)
 	model := zenModel{claude: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
-	transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(herdr, claudePaneID)
 	mode, modeErr := ZenModeOfPlugin(herdr.pluginID)
 	draft, draftErr := SavedDraft(mode.DraftFile(claudePaneID))
-	model.fatal = errors.Join(err, modeErr, draftErr)
+	model.fatal = errors.Join(modeErr, draftErr)
 	model.input.SetValue(draft)
 	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: draft})
-	if transcript != nil {
-		go func() {
-			err := followTranscript(transcript, program.Send)
-			program.Send(fatalMsg{err: fmt.Errorf("Cannot read %s: %w", transcript.Name(), err)})
-		}()
+	go func() {
+		transcript, statusLinePath, err := WaitForClaudeTranscriptAndStatusLinePath(herdr, claudePaneID)
+		if err != nil {
+			program.Send(fatalMsg{err: err})
+			return
+		}
 		go pollAgentStatus(herdr, claudePaneID, program.Send)
 		go followClaudeStatusLine(statusLinePath, 300*time.Millisecond, program.Send)
-	}
+		err = followTranscript(transcript, program.Send)
+		program.Send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err),
+			transcript.Close())})
+	}()
 	finalModel, runErr := program.Run()
-	if transcript != nil {
-		runErr = errors.Join(runErr, transcript.Close())
-	}
 	if finalModel, isDraftSavingView := finalModel.(draftSavingView); isDraftSavingView {
 		return errors.Join(finalModel.zen.fatal, runErr)
 	}
 	return runErr
 }
+
+// WaitForClaudeTranscriptAndStatusLinePath waits for a Claude that just started: herdr reports its session once it is
+// past its startup prompts, and Claude writes the transcript at the first prompt.
+func WaitForClaudeTranscriptAndStatusLinePath(herdr herdrCLI, claudePaneID string) (*os.File, string, error) {
+	for {
+		transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(herdr, claudePaneID)
+		if !errors.Is(err, errClaudeSessionNotReported) && !errors.Is(err, fs.ErrNotExist) {
+			return transcript, statusLinePath, err
+		}
+		time.Sleep(300 * time.Millisecond)
+	}
+}
+
+var errClaudeSessionNotReported = errors.New("herdr reports no session yet for the Claude in this pane")
 
 func openClaudeTranscriptAndStatusLinePath(herdr herdrCLI, claudePaneID string) (*os.File, string, error) {
 	if claudePaneID == "" {
@@ -163,6 +177,9 @@ func openClaudeTranscriptAndStatusLinePath(herdr herdrCLI, claudePaneID string) 
 	claudePane, err := herdr.Pane(claudePaneID)
 	if err != nil {
 		return nil, "", err
+	}
+	if claudePane.AgentSession == nil && claudePane.Agent == "claude" {
+		return nil, "", errClaudeSessionNotReported
 	}
 	if claudePane.AgentSession == nil || claudePane.AgentSession.Agent != "claude" {
 		return nil, "", errors.New("No Claude session in this pane.")

@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -32,6 +33,59 @@ func TestLineNumberAtCountsTheLinesBeforeTheOffset(t *testing.T) {
 		if got != testCase.want {
 			t.Errorf("LineNumberAt(%d) = %d, want %d", testCase.offset, got, testCase.want)
 		}
+	}
+}
+
+func TestTheZenViewWaitsForANewClaudeSessionAndItsFirstPromptBeforeOpeningTheTranscript(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	herdr, _, _ := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
+	opened := make(chan *os.File, 1)
+	go func() {
+		transcript, _, err := WaitForClaudeTranscriptAndStatusLinePath(herdr, "w1:p1")
+		if err != nil {
+			t.Error(err)
+		}
+		opened <- transcript
+	}()
+	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
+	startedPane := claudePane("w1:p1", true)
+	startedPane.AgentSession = &struct {
+		Agent string `json:"agent"`
+		Value string `json:"value"`
+	}{Agent: "claude", Value: sessionID}
+	panesJSON, err := json.Marshal([]herdrPane{startedPane})
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	if err := os.WriteFile(filepath.Join(os.Getenv(fakeHerdrDirEnv), "panes.json"), panesJSON, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	select {
+	case <-opened:
+		t.Fatal("opened before Claude wrote the transcript")
+	default:
+	}
+	projectDir := filepath.Join(home, ".claude", "projects", "C--work")
+	if err := os.MkdirAll(projectDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	transcriptPath := filepath.Join(projectDir, sessionID+".jsonl")
+	if err := os.WriteFile(transcriptPath, []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case transcript := <-opened:
+		if transcript == nil || transcript.Name() != transcriptPath {
+			t.Fatalf("opened %v, want %s", transcript, transcriptPath)
+		}
+		if err := transcript.Close(); err != nil {
+			t.Fatal(err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("still waiting 5 s after Claude wrote the transcript")
 	}
 }
 
