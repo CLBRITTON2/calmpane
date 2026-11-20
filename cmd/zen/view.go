@@ -642,12 +642,13 @@ func (m zenModel) screen() string {
 	if m.copyStatus != "" {
 		shownStatus = m.copyStatus
 	}
-	rows = append(rows, " "+shownStatus, separatorStyle.Render(strings.Repeat("─", m.width)))
+	separator := separatorStyle.Render(strings.Repeat("─", m.width))
+	rows = append(rows, " "+shownStatus, separator)
 	for _, inputRow := range strings.Split(m.input.View(), "\n") {
 		rows = append(rows, " "+inputRow)
 	}
 	if m.claudeStatusLine != "" {
-		rows = append(rows, "", " "+ansi.Truncate(m.claudeStatusLine, max(m.width-1, 0), "")+ansi.ResetStyle)
+		rows = append(rows, separator, " "+ansi.Truncate(m.claudeStatusLine, max(m.width-1, 0), "")+ansi.ResetStyle)
 	}
 	return strings.Join(rows, "\n")
 }

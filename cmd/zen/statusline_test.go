@@ -20,7 +20,7 @@ func modelWithClaudeStatusLine(line string) zenModel {
 	return updated.(zenModel)
 }
 
-func TestTheClaudeStatusLineIsDrawnUnderTheInputAfterABlankRowWithItsColorsAndCutAtTheWidth(t *testing.T) {
+func TestTheClaudeStatusLineIsDrawnUnderASeparatorClosingTheInputWithItsColorsAndCutAtTheWidth(t *testing.T) {
 	line := roseLocation + " \x1b[38;2;156;207;216m" + strings.Repeat("Opus 5.5 ", 8) + "\x1b[0m"
 	model := modelWithClaudeStatusLine(line)
 	rows := strings.Split(model.screen(), "\n")
@@ -30,8 +30,8 @@ func TestTheClaudeStatusLineIsDrawnUnderTheInputAfterABlankRowWithItsColorsAndCu
 	if input := ansi.Strip(rows[9]); !strings.HasPrefix(input, " > ") {
 		t.Errorf("row 10 = %q, want the input", input)
 	}
-	if rows[10] != "" {
-		t.Errorf("row 11 = %q, want blank", rows[10])
+	if separator := ansi.Strip(rows[10]); separator != strings.Repeat("─", 40) {
+		t.Errorf("row 11 = %q, want a separator the full width", separator)
 	}
 	statusRow := rows[11]
 	if !strings.HasPrefix(statusRow, " "+roseLocation+" \x1b[38;2;156;207;216mOpus") {

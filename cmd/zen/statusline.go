@@ -11,7 +11,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 )
 
-// The blank row and the Claude status line row sit under the input.
+// The separator closing the input and the Claude status line row sit under the input.
 const rowsBelowInputWithStatusLine = 2
 
 type claudeStatusLineMsg struct {
