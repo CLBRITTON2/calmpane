@@ -60,7 +60,9 @@ type zenModel struct {
 	status        string
 	// copyStatus reports a ctrl+y copy in place of status until the next key or status.
 	copyStatus string
-	input      textinput.Model
+	// newestCodeBlock is the block ctrl+y copies and whose frame carries the hint, nil while no reply holds one.
+	newestCodeBlock *codeBlockPosition
+	input           textinput.Model
 }
 
 func RunZenView(herdr herdrCLI) error {
@@ -276,18 +278,17 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "end":
 		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
 	case "ctrl+y":
-		lastBlock, hasCodeBlock, err := LastCodeBlock(m.entries)
-		switch {
-		case err != nil:
-			m.status = errorStyle.Render(err.Error())
-			return m, nil
-		case !hasCodeBlock:
+		if m.newestCodeBlock == nil {
 			m.copyStatus = workingStyle.Render("No code block to copy.")
 			return m, nil
-		default:
-			m.copyStatus = workingStyle.Render("Copied the last code block.")
-			return m, tea.SetClipboard(lastBlock.code)
 		}
+		replyBlocks, err := CodeBlocks(m.entries[m.newestCodeBlock.entry].text)
+		if err != nil {
+			m.status = errorStyle.Render(err.Error())
+			return m, nil
+		}
+		m.copyStatus = workingStyle.Render("Copied the last code block.")
+		return m, tea.SetClipboard(replyBlocks[m.newestCodeBlock.block].code)
 	case "enter":
 		prompt := m.input.Value()
 		if prompt == "" {
@@ -325,6 +326,19 @@ func (m zenModel) withEntries(entries []dialogueEntry) zenModel {
 	firstNew := len(m.entries)
 	m.entries = append(m.entries, entries...)
 	m.entryRows = append(m.entryRows, make([][]string, len(entries))...)
+	newPosition, err := NewestCodeBlockPosition(entries)
+	if err != nil {
+		m.status = errorStyle.Render(err.Error())
+	}
+	if newPosition != nil {
+		formerPosition := m.newestCodeBlock
+		m.newestCodeBlock = &codeBlockPosition{entry: firstNew + newPosition.entry, block: newPosition.block}
+		// the former newest block's frame loses the copy hint, in the same number of rows
+		if formerPosition != nil && m.entryRows[formerPosition.entry] != nil {
+			m.entryRows[formerPosition.entry] = nil
+			m = m.withEntryDrawn(formerPosition.entry)
+		}
+	}
 	if m.rowsBelowView > 0 {
 		for index := firstNew; index < len(m.entries); index++ {
 			m = m.withEntryDrawn(index)
@@ -366,7 +380,11 @@ func (m zenModel) withEntryDrawn(index int) zenModel {
 	if m.entryRows[index] != nil {
 		return m
 	}
-	rows, err := EntryRows(m.entries[index], m.width, m.replyRenderer)
+	copyHintBlock := -1
+	if m.newestCodeBlock != nil && m.newestCodeBlock.entry == index {
+		copyHintBlock = m.newestCodeBlock.block
+	}
+	rows, err := EntryRows(m.entries[index], copyHintBlock, m.width, m.replyRenderer)
 	if err != nil {
 		m.status = errorStyle.Render(err.Error())
 		rows = []string{}

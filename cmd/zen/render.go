@@ -12,7 +12,6 @@ import (
 
 // Rosé Pine main, https://rosepinetheme.com/palette, as perusal uses it. The base background is the terminal's.
 const (
-	colorSurface      = "#1f1d2e"
 	colorOverlay      = "#26233a"
 	colorHighlightMed = "#403d52"
 	colorMuted        = "#6e6a86"
@@ -67,14 +66,16 @@ func NewReplyRenderer(width int) (*glamour.TermRenderer, error) {
 	return renderer, nil
 }
 
-// EntryRows draws an entry as screen rows, the first row blank to separate it from the entry above.
-func EntryRows(entry dialogueEntry, width int, replyRenderer *glamour.TermRenderer) ([]string, error) {
+// EntryRows draws an entry as screen rows, the first row blank to separate it from the entry above. In a reply, the
+// code block numbered copyHintBlock, -1 for none, carries the copy key's hint.
+func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer *glamour.TermRenderer) ([]string,
+	error) {
 	var blockRows []string
 	switch entry.kind {
 	case promptEntry:
 		return append([]string{""}, PromptBandRows(entry.text, width)...), nil
 	case replyEntry:
-		replyRows, err := ReplyRows(entry.text, width, replyRenderer)
+		replyRows, err := ReplyRows(entry.text, copyHintBlock, width, replyRenderer)
 		if err != nil {
 			return nil, err
 		}

@@ -30,7 +30,8 @@ func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "## Plan\n\nRun `go test` now."}, 60, replyRenderer)
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "## Plan\n\nRun `go test` now."}, -1, 60,
+		replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}
@@ -42,7 +43,7 @@ func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
 
 func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
 	entry := dialogueEntry{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}}
-	rows, err := EntryRows(entry, 60, nil)
+	rows, err := EntryRows(entry, -1, 60, nil)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}
@@ -61,7 +62,8 @@ func TestEntryRowsIndentsTabIndentedCodeWithSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run:\n\n    func f() {\n    \treturn\n    }"}, 60, replyRenderer)
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run:\n\n    func f() {\n    \treturn\n    }"}, -1, 60,
+		replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}

@@ -8,67 +8,79 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestReplyRowsDrawEachCodeLineOnASurfaceBoxTheReplyWidth(t *testing.T) {
-	reply := "Run this:\n\n```powershell\nGet-Process zen |\n\tStop-Process -Force\n```\n\nThen check it is gone."
+func TestReplyRowsFrameEachCodeBlockWithRulesTheReplyWidthAndHintOnlyTheNumberedBlock(t *testing.T) {
+	reply := "Run this:\n\n```powershell\nGet-Process zen |\n\tStop-Process -Force\n```\n\nThen this:\n\n```\nherdr --remote claude-vm\n```\n\nDone."
 	for _, width := range []int{40, 100} {
 		replyRenderer, err := NewReplyRenderer(width)
 		if err != nil {
 			t.Fatalf("NewReplyRenderer(%d): %v", width, err)
 		}
-		rows, err := ReplyRows(reply, width, replyRenderer)
+		rows, err := ReplyRows(reply, 1, width, replyRenderer)
 		if err != nil {
 			t.Fatalf("ReplyRows at width %d: %v", width, err)
 		}
-		boxRows := []string{}
+		plain := []string{}
 		for _, row := range rows {
-			if strings.HasPrefix(row, surfaceBackground) {
-				boxRows = append(boxRows, row)
+			plain = append(plain, ansi.Strip(row))
+		}
+		topRules, bottomRules := []string{}, []string{}
+		inFrame := false
+		for index, row := range plain {
+			switch {
+			case strings.HasPrefix(row, "╭"):
+				topRules = append(topRules, row)
+				inFrame = true
+			case strings.HasPrefix(row, "╰"):
+				bottomRules = append(bottomRules, row)
+				inFrame = false
+			case inFrame:
+				if strings.ContainsAny(row, "╭╮╰╯│─") || strings.Contains(rows[index], "\x1b[48") {
+					t.Errorf("width %d: code row %q holds a frame character or a background", width, rows[index])
+				}
+			}
+			if strings.HasPrefix(row, "╭") || strings.HasPrefix(row, "╰") {
+				if ruleWidth := ansi.StringWidth(row); ruleWidth != width-2 {
+					t.Errorf("width %d: rule %q is %d columns wide, want %d", width, row, ruleWidth, width-2)
+				}
 			}
 		}
-		plainBox := []string{}
-		for _, row := range boxRows {
-			plainBox = append(plainBox, strings.TrimRight(ansi.Strip(row), " "))
-			if rowWidth := ansi.StringWidth(row); rowWidth != width-2 {
-				t.Errorf("width %d: box row %q is %d columns wide, want %d", width, ansi.Strip(row), rowWidth, width-2)
-			}
-			// every reset inside the row is followed by the surface again, so no cell loses the background
-			inside := strings.TrimSuffix(row, ansi.ResetStyle)
-			if strings.Count(inside, "\x1b[0m") != strings.Count(inside, "\x1b[0m"+surfaceBackground) {
-				t.Errorf("width %d: box row %q drops the surface after a reset", width, row)
+		if len(topRules) != 2 || len(bottomRules) != 2 {
+			t.Fatalf("width %d: rows = %q, want two frames", width, plain)
+		}
+		if !strings.HasPrefix(topRules[0], "╭─ powershell ─") || strings.Contains(topRules[0], copyKeyHint) {
+			t.Errorf("width %d: first top rule = %q, want the language and no hint", width, topRules[0])
+		}
+		if !strings.HasPrefix(topRules[1], "╭──") || !strings.HasSuffix(topRules[1], "─ "+copyKeyHint+" ─╮") {
+			t.Errorf("width %d: newest top rule = %q, want no language and the hint at its right end", width,
+				topRules[1])
+		}
+		joined := strings.Join(plain, "\n")
+		for _, codeRow := range []string{"\n  Get-Process zen |\n", "\n      Stop-Process -Force\n",
+			"\n  herdr --remote claude-vm\n"} {
+			if !strings.Contains(joined, codeRow) {
+				t.Errorf("width %d: rows = %q, want the code row %q indented 2", width, plain, codeRow)
 			}
 		}
-		want := []string{"", "  Get-Process zen |", "      Stop-Process -Force", ""}
-		if !reflect.DeepEqual(plainBox, want) {
-			t.Errorf("width %d: box rows = %q, want %q", width, plainBox, want)
-		}
-		plain := ansi.Strip(strings.Join(rows, "\n"))
-		if !strings.Contains(plain, "Run this:") || !strings.Contains(plain, "Then check it is gone.") ||
-			strings.Contains(plain, "ZENCODEBLOCK") {
-			t.Errorf("width %d: reply rows = %q, want the prose around the box and no placeholder", width, plain)
+		if !strings.Contains(joined, "Run this:") || !strings.Contains(joined, "Done.") ||
+			strings.Contains(joined, "ZENCODEBLOCK") {
+			t.Errorf("width %d: reply rows = %q, want the prose around the frames and no placeholder", width, joined)
 		}
 	}
 }
 
-func TestCodeBoxRowsWrapALongLineOnTheSurfaceAtTheBoxWidth(t *testing.T) {
+func TestCodeFrameRowsWrapALongLineInsideTheFrame(t *testing.T) {
 	block := codeBlock{code: "Get-Process -Name zen | Stop-Process -Force -PassThru -Verbose", language: "powershell"}
-	rows, err := CodeBoxRows(block, 30)
+	rows, err := CodeFrameRows(block, "", 30)
 	if err != nil {
-		t.Fatalf("CodeBoxRows: %v", err)
+		t.Fatalf("CodeFrameRows: %v", err)
 	}
 	if len(rows) < 4 {
-		t.Fatalf("rows = %q, want the code wrapped onto at least two rows between the blank rows", rows)
+		t.Fatalf("rows = %q, want the code wrapped onto at least two rows between the rules", rows)
 	}
 	codeText := ""
-	for _, row := range rows {
-		if !strings.HasPrefix(row, surfaceBackground) {
-			t.Errorf("row %q does not start on the surface", row)
-		}
-		if rowWidth := ansi.StringWidth(row); rowWidth != 30 {
-			t.Errorf("row %q is %d columns wide, want 30", ansi.Strip(row), rowWidth)
-		}
-		inside := strings.TrimSuffix(row, ansi.ResetStyle)
-		if strings.Count(inside, "\x1b[0m") != strings.Count(inside, "\x1b[0m"+surfaceBackground) {
-			t.Errorf("row %q drops the surface after a reset", row)
+	for _, row := range rows[1 : len(rows)-1] {
+		if rowWidth := ansi.StringWidth(row); rowWidth > 30 {
+			t.Errorf("code row %q is %d columns wide, more than the frame's 30", ansi.Strip(row), rowWidth)
 		}
 		codeText += ansi.Strip(row)
 	}
@@ -77,18 +89,40 @@ func TestCodeBoxRowsWrapALongLineOnTheSurfaceAtTheBoxWidth(t *testing.T) {
 	}
 }
 
+func TestTopRuleDropsTheHintThenTheLanguageWhenTooNarrow(t *testing.T) {
+	cases := []struct {
+		width int
+		want  string
+	}{
+		{width: 34, want: "╭─ go ─────────── ctrl+y copies ─╮"},
+		{width: 20, want: "╭─ go ─────────────╮"},
+		{width: 6, want: "╭────╮"},
+	}
+	for _, testCase := range cases {
+		if got := ansi.Strip(TopRule("go", copyKeyHint, testCase.width)); got != testCase.want {
+			t.Errorf("TopRule at width %d = %q, want %q", testCase.width, got, testCase.want)
+		}
+	}
+}
+
 func TestReplyRowsKeepTheTextAroundACodeBlock(t *testing.T) {
+	// the rules of a frame in a reply 60 columns wide, which draws 58
+	shTopRule := "╭─ sh " + strings.Repeat("─", 51) + "╮"
+	plainTopRule := "╭" + strings.Repeat("─", 56) + "╮"
+	bottomRule := "╰" + strings.Repeat("─", 56) + "╯"
 	cases := []struct {
 		name  string
 		reply string
 		want  []string
 	}{
 		{name: "in a list item", reply: "1. First step:\n   ```sh\n   echo one\n   ```\n   then this.\n2. Second step",
-			want: []string{"", "1. First step:", "", "echo one", "", "then this.", "2. Second step"}},
+			want: []string{"", "1. First step:", shTopRule, "echo one", bottomRule,
+				"then this.", "2. Second step"}},
 		{name: "in a quote", reply: "> Run:\n> ```sh\n> echo one\n> ```\n> done",
-			want: []string{"", "│ Run:", "│", "", "echo one", "", "│", "│ done"}},
+			want: []string{"", "│ Run:", "│", shTopRule, "echo one", bottomRule, "│",
+				"│ done"}},
 		{name: "prose that spells the placeholder", reply: "The row ZENCODEBLOCK0 stays text.\n\n```\necho one\n```",
-			want: []string{"The row ZENCODEBLOCK0 stays text.", "", "", "echo one", ""}},
+			want: []string{"The row ZENCODEBLOCK0 stays text.", "", plainTopRule, "echo one", bottomRule}},
 	}
 	replyRenderer, err := NewReplyRenderer(60)
 	if err != nil {
@@ -96,7 +130,7 @@ func TestReplyRowsKeepTheTextAroundACodeBlock(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			rows, err := ReplyRows(testCase.reply, 60, replyRenderer)
+			rows, err := ReplyRows(testCase.reply, -1, 60, replyRenderer)
 			if err != nil {
 				t.Fatalf("ReplyRows: %v", err)
 			}

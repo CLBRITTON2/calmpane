@@ -30,9 +30,20 @@ type codeBlock struct {
 // The extensions glamour's own parser uses, so a block is found where glamour would render one.
 var replyParser = goldmark.New(goldmark.WithExtensions(extension.GFM, extension.DefinitionList)).Parser()
 
-var surfaceBackground = ansi.Style{}.BackgroundColor(lipgloss.Color(colorSurface)).String()
+var (
+	frameRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHighlightMed))
+	frameLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
+)
 
-const codeBoxPadding = "  "
+const codeIndent = "  "
+
+const copyKeyHint = "ctrl+y copies"
+
+// codeBlockPosition is where a code block is: the index of its entry, and its number among that reply's blocks.
+type codeBlockPosition struct {
+	entry int
+	block int
+}
 
 // CodeBlocks finds the fenced code blocks of a reply that hold at least one line. An empty one stays with glamour.
 func CodeBlocks(markdown string) ([]codeBlock, error) {
@@ -72,21 +83,22 @@ func CodeBlocks(markdown string) ([]codeBlock, error) {
 	return blocks, nil
 }
 
-// LastCodeBlock is the newest fenced code block of the entries' replies, and false when they hold none.
-func LastCodeBlock(entries []dialogueEntry) (codeBlock, bool, error) {
+// NewestCodeBlockPosition is where the newest fenced code block of the entries' replies is, and nil when they hold
+// none.
+func NewestCodeBlockPosition(entries []dialogueEntry) (*codeBlockPosition, error) {
 	for index := len(entries) - 1; index >= 0; index-- {
 		if entries[index].kind != replyEntry {
 			continue
 		}
 		replyBlocks, err := CodeBlocks(entries[index].text)
 		if err != nil {
-			return codeBlock{}, false, err
+			return nil, err
 		}
 		if len(replyBlocks) > 0 {
-			return replyBlocks[len(replyBlocks)-1], true, nil
+			return &codeBlockPosition{entry: index, block: len(replyBlocks) - 1}, nil
 		}
 	}
-	return codeBlock{}, false, nil
+	return nil, nil
 }
 
 func lineStart(markdown string, offset int) int {
@@ -101,8 +113,9 @@ func lineEnd(markdown string, offset int) int {
 	return len(markdown)
 }
 
-// ReplyRows renders a reply's markdown with glamour and each code block as a box the reply's width.
-func ReplyRows(reply string, width int, replyRenderer *glamour.TermRenderer) ([]string, error) {
+// ReplyRows renders a reply's markdown with glamour and each code block in a frame the reply's width. The block
+// numbered copyHintBlock, -1 for none, carries the copy key's hint in its top rule.
+func ReplyRows(reply string, copyHintBlock int, width int, replyRenderer *glamour.TermRenderer) ([]string, error) {
 	blocks, err := CodeBlocks(reply)
 	if err != nil {
 		return nil, err
@@ -143,7 +156,11 @@ func ReplyRows(reply string, width int, replyRenderer *glamour.TermRenderer) ([]
 		if index >= len(blocks) {
 			return nil, fmt.Errorf("reply row %q names no code block of the %d in the reply", plain, len(blocks))
 		}
-		boxRows, err := CodeBoxRows(blocks[index], max(width-2, 1))
+		copyHint := ""
+		if index == copyHintBlock {
+			copyHint = copyKeyHint
+		}
+		frameRows, err := CodeFrameRows(blocks[index], copyHint, max(width-2, 1))
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +170,7 @@ func ReplyRows(reply string, width int, replyRenderer *glamour.TermRenderer) ([]
 		if HoldsReplyText(before) {
 			rows = append(rows, before)
 		}
-		rows = append(rows, boxRows...)
+		rows = append(rows, frameRows...)
 		if HoldsReplyText(after) {
 			rows = append(rows, after)
 		}
@@ -168,24 +185,47 @@ func HoldsReplyText(rowPart string) bool {
 	return strings.TrimSpace(strings.ReplaceAll(ansi.Strip(rowPart), quoteBar, "")) != ""
 }
 
-// CodeBoxRows draws a code block highlighted on a surface box width columns wide, with a blank box row above and
-// below the code. A code line wider than the box wraps.
-func CodeBoxRows(block codeBlock, width int) ([]string, error) {
+// CodeFrameRows draws a highlighted code block between a top and a bottom rule width columns wide, with no side
+// borders, so a drag over the code selects no frame characters. A code line wider than the frame wraps.
+func CodeFrameRows(block codeBlock, copyHint string, width int) ([]string, error) {
 	var highlighted strings.Builder
 	if err := quick.Highlight(&highlighted, strings.ReplaceAll(block.code, "\t", "    "), block.language,
 		"terminal16m", "rose-pine"); err != nil {
 		return nil, fmt.Errorf("highlight the %q code block %.80q: %w", block.language, block.code, err)
 	}
-	blankRow := surfaceBackground + strings.Repeat(" ", width) + ansi.ResetStyle
-	codeWidth := max(width-len(codeBoxPadding), 1)
-	rows := []string{blankRow}
+	rows := []string{TopRule(block.language, copyHint, width)}
+	codeWidth := max(width-len(codeIndent), 1)
 	for _, line := range strings.Split(strings.TrimRight(highlighted.String(), "\n"), "\n") {
 		for _, codeRow := range strings.Split(ansi.Hardwrap(line, codeWidth, true), "\n") {
-			// chroma resets after each token, which would drop the surface too
-			codeRow = strings.ReplaceAll(codeRow, "\x1b[0m", "\x1b[0m"+surfaceBackground)
-			fill := strings.Repeat(" ", max(codeWidth-ansi.StringWidth(codeRow), 0))
-			rows = append(rows, surfaceBackground+codeBoxPadding+codeRow+fill+ansi.ResetStyle)
+			rows = append(rows, codeIndent+codeRow)
 		}
 	}
-	return append(rows, blankRow), nil
+	bottomRule := frameRuleStyle.Render("╰" + strings.Repeat("─", max(width-2, 0)) + "╯")
+	return append(rows, bottomRule), nil
+}
+
+// TopRule is a code frame's top rule width columns wide, with the language at its left end and the copy hint at its
+// right end. A frame too narrow for both drops the hint, then the language.
+func TopRule(language string, copyHint string, width int) string {
+	labelWidth := func(label string) int {
+		if label == "" {
+			return 0
+		}
+		return ansi.StringWidth(label) + 3
+	}
+	if width-2-labelWidth(language)-labelWidth(copyHint) < 1 {
+		copyHint = ""
+	}
+	if width-2-labelWidth(language) < 1 {
+		language = ""
+	}
+	rule := frameRuleStyle.Render("╭")
+	if language != "" {
+		rule += frameRuleStyle.Render("─ ") + frameLabelStyle.Render(language) + frameRuleStyle.Render(" ")
+	}
+	rule += frameRuleStyle.Render(strings.Repeat("─", max(width-2-labelWidth(language)-labelWidth(copyHint), 0)))
+	if copyHint != "" {
+		rule += frameRuleStyle.Render(" ") + frameLabelStyle.Render(copyHint) + frameRuleStyle.Render(" ─")
+	}
+	return rule + frameRuleStyle.Render("╮")
 }

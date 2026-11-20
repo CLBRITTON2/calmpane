@@ -244,3 +244,20 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 		})
 	}
 }
+
+func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: textinput.New()}
+	model = model.withSize(60, 40).withEntries([]dialogueEntry{{kind: replyEntry, text: "```sh\nfirst\n```"}})
+	model = model.withEntries([]dialogueEntry{
+		{kind: promptEntry, text: "and then?"}, {kind: replyEntry, text: "```go\nsecond\n```"},
+	})
+	hintedRules := []string{}
+	for _, row := range strings.Split(ansi.Strip(model.screen()), "\n") {
+		if strings.Contains(row, copyKeyHint) {
+			hintedRules = append(hintedRules, strings.TrimSpace(row))
+		}
+	}
+	if len(hintedRules) != 1 || !strings.HasPrefix(hintedRules[0], "╭─ go ─") {
+		t.Errorf("rules with the hint = %q, want only the go block's", hintedRules)
+	}
+}
