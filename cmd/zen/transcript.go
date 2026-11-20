@@ -5,8 +5,11 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"time"
 )
 
 type entryKind int
@@ -34,9 +37,10 @@ var notPromptPrefixes = []string{
 var pastedContentTag = regexp.MustCompile(`</?pasted_content[^>]*>\n?`)
 
 type transcriptRecord struct {
-	Type    string `json:"type"`
-	IsMeta  bool   `json:"isMeta"`
-	Message struct {
+	Type      string    `json:"type"`
+	IsMeta    bool      `json:"isMeta"`
+	Timestamp time.Time `json:"timestamp"`
+	Message   struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	// Claude Code writes a prompt sent while it works as an attachment of type queued_command.
@@ -68,6 +72,18 @@ type contentBlock struct {
 	Text  string          `json:"text"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
+}
+
+type toolCallInput struct {
+	Description string `json:"description"`
+	FilePath    string `json:"file_path"`
+	Pattern     string `json:"pattern"`
+}
+
+type currentTurn struct {
+	// promptTime is zero while the tail holds no prompt.
+	promptTime       time.Time
+	toolCallActivity string
 }
 
 type askUserQuestionInput struct {
@@ -177,6 +193,62 @@ func assistantEntries(content json.RawMessage) ([]dialogueEntry, error) {
 		}
 	}
 	return entries, nil
+}
+
+func TurnAfterLine(turn currentTurn, line []byte, lineEntries []dialogueEntry) (currentTurn, error) {
+	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry dialogueEntry) bool { return entry.kind == promptEntry })
+	if !holdsPrompt && !bytes.Contains(line, []byte(`"type":"tool_use"`)) {
+		return turn, nil
+	}
+	var record transcriptRecord
+	if err := json.Unmarshal(line, &record); err != nil {
+		return turn, fmt.Errorf("decode transcript line %.80q: %w", line, err)
+	}
+	if holdsPrompt {
+		return currentTurn{promptTime: record.Timestamp}, nil
+	}
+	if record.Type != "assistant" {
+		return turn, nil
+	}
+	var blocks []contentBlock
+	if err := json.Unmarshal(record.Message.Content, &blocks); err != nil {
+		return turn, fmt.Errorf("decode assistant content %.80q: %w", record.Message.Content, err)
+	}
+	for index := len(blocks) - 1; index >= 0; index-- {
+		if blocks[index].Type != "tool_use" {
+			continue
+		}
+		toolCallActivity, err := ToolCallActivity(blocks[index].Name, blocks[index].Input)
+		if err != nil {
+			return turn, err
+		}
+		return currentTurn{promptTime: turn.promptTime, toolCallActivity: toolCallActivity}, nil
+	}
+	return turn, nil
+}
+
+func ToolCallActivity(toolName string, input json.RawMessage) (string, error) {
+	var fields toolCallInput
+	if err := json.Unmarshal(input, &fields); err != nil {
+		return "", fmt.Errorf("decode %s input %.80q: %w", toolName, input, err)
+	}
+	switch toolName {
+	case "Bash":
+		if fields.Description == "" {
+			return "Running a command", nil
+		}
+		return fields.Description, nil
+	case "Edit", "Write":
+		return "Editing " + filepath.Base(fields.FilePath), nil
+	case "Read":
+		return "Reading " + filepath.Base(fields.FilePath), nil
+	case "Grep", "Glob":
+		return "Searching for " + fields.Pattern, nil
+	case "Agent":
+		return fields.Description, nil
+	default:
+		return "", nil
+	}
 }
 
 func TailStart(file io.ReaderAt, fileSize int64, tailBytes int64) (int64, error) {

@@ -35,10 +35,15 @@ const inputPrompt = "> "
 type entriesReadMsg struct {
 	entries         []dialogueEntry
 	queueOperations []queueOperation
+	turn            currentTurn
 }
 
 type agentStatusMsg struct {
 	status string
+}
+
+type clockTickMsg struct {
+	now time.Time
 }
 
 // problemMsg carries a failure the view keeps running through, shown on the status line.
@@ -86,7 +91,12 @@ type zenModel struct {
 	height        int
 	// rowsBelowView counts the rows under the bottom of the view, 0 when it shows the newest entry.
 	rowsBelowView int
-	status        string
+	agentStatus   string
+	turn          currentTurn
+	now           time.Time
+	clockTicking  bool
+	// status reports the latest problem in place of the agent status row, until the agent status changes.
+	status string
 	// copyStatus reports a ctrl+y copy in place of status until the next key or status.
 	copyStatus string
 	// newestCodeBlock is the block ctrl+y copies and whose frame carries the hint, nil while no reply holds one.
@@ -211,15 +221,18 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 	var partialLine []byte
 	unsentEntries := []dialogueEntry{}
 	unsentQueueOperations := []queueOperation{}
+	turn := currentTurn{}
+	turnChanged := false
 	linesRead := 0
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err == io.EOF {
 			partialLine = append(partialLine, line...)
-			if len(unsentEntries) > 0 || len(unsentQueueOperations) > 0 {
-				send(entriesReadMsg{entries: unsentEntries, queueOperations: unsentQueueOperations})
+			if len(unsentEntries) > 0 || len(unsentQueueOperations) > 0 || turnChanged {
+				send(entriesReadMsg{entries: unsentEntries, queueOperations: unsentQueueOperations, turn: turn})
 				unsentEntries = []dialogueEntry{}
 				unsentQueueOperations = []queueOperation{}
+				turnChanged = false
 			}
 			time.Sleep(200 * time.Millisecond)
 			continue
@@ -235,6 +248,10 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 		if err == nil {
 			lineQueueOperations, err = QueueOperations(line)
 		}
+		lineTurn := turn
+		if err == nil {
+			lineTurn, err = TurnAfterLine(turn, line, lineEntries)
+		}
 		if err != nil {
 			startLine, countErr := LineNumberAt(transcript, start)
 			if countErr != nil {
@@ -249,6 +266,8 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 			unsentQueueOperations = append(unsentQueueOperations, operation)
 		}
 		unsentEntries = append(unsentEntries, lineEntries...)
+		turnChanged = turnChanged || lineTurn != turn
+		turn = lineTurn
 	}
 }
 
@@ -285,15 +304,31 @@ func pollAgentStatus(herdr herdrCLI, claudePaneID string, send func(tea.Msg)) {
 	}
 }
 
-func statusLine(agentStatus string) string {
+func statusLine(agentStatus string, turn currentTurn, now time.Time, width int) string {
 	switch agentStatus {
 	case "blocked":
 		return waitingStyle.Render("Waiting for you in Claude. Press " + toggleKey + " to answer.")
 	case "working":
-		return workingStyle.Render("Working...")
+		activity := turn.toolCallActivity
+		if activity == "" {
+			activity = "Working..."
+		}
+		if !turn.promptTime.IsZero() {
+			activity += " · " + TurnDuration(max(now.Sub(turn.promptTime), 0))
+		}
+		// the row's left margin takes one column
+		return workingStyle.Render(ansi.Truncate(activity, max(width-1, 0), ""))
 	default:
 		return ""
 	}
+}
+
+func TurnDuration(elapsed time.Duration) string {
+	seconds := int(elapsed / time.Second)
+	if seconds < 60 {
+		return fmt.Sprintf("%ds", seconds)
+	}
+	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
 }
 
 func (m zenModel) Init() tea.Cmd {
@@ -305,6 +340,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.withSize(msg.Width, msg.Height), nil
 	case entriesReadMsg:
+		m.turn = msg.turn
 		return m.withEntries(msg.entries, msg.queueOperations), nil
 	case sendNowKeysSentMsg:
 		if msg.err != nil {
@@ -313,9 +349,21 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentStatusMsg:
-		m.status = statusLine(msg.status)
+		m.agentStatus = msg.status
+		m.status = ""
 		m.copyStatus = ""
-		return m, nil
+		if msg.status != "working" || m.clockTicking {
+			return m, nil
+		}
+		m.clockTicking = true
+		return m, func() tea.Msg { return clockTickMsg{now: time.Now()} }
+	case clockTickMsg:
+		m.now = msg.now
+		if m.agentStatus != "working" {
+			m.clockTicking = false
+			return m, nil
+		}
+		return m, tea.Every(time.Second, func(now time.Time) tea.Msg { return clockTickMsg{now: now} })
 	case problemMsg:
 		m.status = errorStyle.Render(msg.err.Error())
 		m.copyStatus = ""
@@ -641,6 +689,9 @@ func (m zenModel) screen() string {
 	rows := make([]string, height-len(visible), height+rowsAboveInput+m.input.Height()+m.rowsBelowInput())
 	rows = append(rows, visible...)
 	shownStatus := m.status
+	if shownStatus == "" {
+		shownStatus = statusLine(m.agentStatus, m.turn, m.now, m.width)
+	}
 	if m.copyStatus != "" {
 		shownStatus = m.copyStatus
 	}

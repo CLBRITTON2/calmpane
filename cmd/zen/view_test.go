@@ -651,6 +651,14 @@ func TestFollowTranscriptSendsQueueOperationsInTheirPlaceAmongTheEntries(t *test
 	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)
 	}
+	read := nextEntriesRead(t, followTranscriptMessages(t, path))
+	want := []queueOperation{{operation: "enqueue", text: "second", entriesBefore: 1}}
+	if !reflect.DeepEqual(read.queueOperations, want) {
+		t.Errorf("queue operations = %+v, want %+v", read.queueOperations, want)
+	}
+}
+
+func followTranscriptMessages(t *testing.T, path string) chan tea.Msg {
 	transcript, err := os.Open(path)
 	if err != nil {
 		t.Fatalf("open transcript: %v", err)
@@ -664,16 +672,16 @@ func TestFollowTranscriptSendsQueueOperationsInTheirPlaceAmongTheEntries(t *test
 	go func() {
 		messages <- fatalMsg{err: followTranscript(transcript, func(msg tea.Msg) { messages <- msg })}
 	}()
+	return messages
+}
+
+func nextEntriesRead(t *testing.T, messages chan tea.Msg) entriesReadMsg {
 	for {
 		select {
 		case msg := <-messages:
 			switch msg := msg.(type) {
 			case entriesReadMsg:
-				want := []queueOperation{{operation: "enqueue", text: "second", entriesBefore: 1}}
-				if !reflect.DeepEqual(msg.queueOperations, want) {
-					t.Errorf("queue operations = %+v, want %+v", msg.queueOperations, want)
-				}
-				return
+				return msg
 			case problemMsg:
 				t.Fatalf("followTranscript reported: %v", msg.err)
 			case fatalMsg:
@@ -682,5 +690,168 @@ func TestFollowTranscriptSendsQueueOperationsInTheirPlaceAmongTheEntries(t *test
 		case <-time.After(5 * time.Second):
 			t.Fatal("no entries read after 5 s")
 		}
+	}
+}
+
+func promptLine(timestamp string, prompt string) string {
+	return `{"type":"user","timestamp":"` + timestamp + `","message":{"role":"user","content":"` + prompt + `"}}`
+}
+
+func toolCallLine(toolName string, input string) string {
+	return `{"type":"assistant","timestamp":"2026-11-20T10:00:01.000Z","message":{"role":"assistant","content":[` +
+		`{"type":"text","text":"On it."},{"type":"tool_use","id":"t1","name":"` + toolName + `","input":` + input + `}]}}`
+}
+
+func TestTheWorkingRowNamesTheNewestToolCallOfTheTurnAndTheTimeSinceItsPrompt(t *testing.T) {
+	prompt := promptLine("2026-11-20T10:00:00.000Z", "go")
+	now := time.Date(2026, 11, 20, 10, 0, 42, 500_000_000, time.UTC)
+	cases := []struct {
+		name    string
+		lines   []string
+		wantRow string
+	}{
+		{name: "Bash with a description",
+			lines: []string{prompt,
+				toolCallLine("Bash", `{"command":"go test ./cmd/zen/...","description":"Running go test ./cmd/zen/..."}`)},
+			wantRow: "Running go test ./cmd/zen/... · 42s"},
+		{name: "Bash without a description", lines: []string{prompt, toolCallLine("Bash", `{"command":"ls"}`)},
+			wantRow: "Running a command · 42s"},
+		{name: "Edit", lines: []string{prompt, toolCallLine("Edit", `{"file_path":"C:\\dev\\zen\\cmd\\zen\\view.go"}`)},
+			wantRow: "Editing view.go · 42s"},
+		{name: "Write", lines: []string{prompt, toolCallLine("Write", `{"file_path":"C:/dev/zen/notes.md"}`)},
+			wantRow: "Editing notes.md · 42s"},
+		{name: "Read", lines: []string{prompt, toolCallLine("Read", `{"file_path":"C:/dev/zen/go.mod"}`)},
+			wantRow: "Reading go.mod · 42s"},
+		{name: "Grep", lines: []string{prompt, toolCallLine("Grep", `{"pattern":"statusLine","path":"cmd"}`)},
+			wantRow: "Searching for statusLine · 42s"},
+		{name: "Glob", lines: []string{prompt, toolCallLine("Glob", `{"pattern":"**/*.go"}`)},
+			wantRow: "Searching for **/*.go · 42s"},
+		{name: "Agent", lines: []string{prompt, toolCallLine("Agent", `{"description":"Find the herdr calls","prompt":"x"}`)},
+			wantRow: "Find the herdr calls · 42s"},
+		{name: "unknown tool", lines: []string{prompt, toolCallLine("Read", `{"file_path":"a.go"}`),
+			toolCallLine("WebSearch", `{"query":"herdr"}`)},
+			wantRow: "Working... · 42s"},
+		{name: "no tool call yet", lines: []string{prompt}, wantRow: "Working... · 42s"},
+		{name: "tool call of an earlier turn ignored",
+			lines: []string{promptLine("2026-11-20T09:00:00.000Z", "first"), toolCallLine("Bash", `{"command":"ls"}`),
+				prompt},
+			wantRow: "Working... · 42s"},
+		{name: "no prompt in the tail", lines: []string{toolCallLine("Read", `{"file_path":"a.go"}`)},
+			wantRow: "Reading a.go"},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			turn := currentTurn{}
+			for _, line := range testCase.lines {
+				lineEntries, err := DialogueEntries([]byte(line))
+				if err != nil {
+					t.Fatalf("DialogueEntries(%s): %v", line, err)
+				}
+				turn, err = TurnAfterLine(turn, []byte(line), lineEntries)
+				if err != nil {
+					t.Fatalf("TurnAfterLine(%s): %v", line, err)
+				}
+			}
+			if row := ansi.Strip(statusLine("working", turn, now, 80)); row != testCase.wantRow {
+				t.Errorf("working row = %q, want %q", row, testCase.wantRow)
+			}
+		})
+	}
+}
+
+func TestTheWorkingRowIsCutAtTheViewWidth(t *testing.T) {
+	turn := currentTurn{toolCallActivity: "Running a very long command description"}
+	if row := ansi.Strip(statusLine("working", turn, time.Time{}, 12)); row != "Running a v" {
+		t.Errorf("working row at width 12 = %q, want the 11 columns after the margin", row)
+	}
+}
+
+func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesWithTwoDigitSecondsFromOne(t *testing.T) {
+	cases := []struct {
+		elapsed time.Duration
+		want    string
+	}{
+		{elapsed: 0, want: "0s"},
+		{elapsed: 42*time.Second + 900*time.Millisecond, want: "42s"},
+		{elapsed: 59 * time.Second, want: "59s"},
+		{elapsed: time.Minute, want: "1m00s"},
+		{elapsed: 3*time.Minute + 5*time.Second, want: "3m05s"},
+	}
+	for _, testCase := range cases {
+		if got := TurnDuration(testCase.elapsed); got != testCase.want {
+			t.Errorf("TurnDuration(%s) = %q, want %q", testCase.elapsed, got, testCase.want)
+		}
+	}
+}
+
+func TestTheBlockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
+	turn := currentTurn{promptTime: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), toolCallActivity: "Reading go.mod"}
+	now := turn.promptTime.Add(42 * time.Second)
+	if row := ansi.Strip(statusLine("blocked", turn, now, 80)); row != "Waiting for you in Claude. Press alt+x to answer." {
+		t.Errorf("blocked row = %q", row)
+	}
+	if row := statusLine("idle", turn, now, 80); row != "" {
+		t.Errorf("idle row = %q, want it empty", row)
+	}
+}
+
+func TestTheClockTicksWhileWorkingAndTheRowClearsWhenTheTurnEnds(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 12)
+	promptTime := time.Now().Add(-42 * time.Second)
+	read, _ := model.Update(entriesReadMsg{turn: currentTurn{promptTime: promptTime, toolCallActivity: "Reading go.mod"}})
+	started, firstTick := read.(zenModel).Update(agentStatusMsg{status: "working"})
+	if firstTick == nil {
+		t.Fatal("working status returned no clock tick")
+	}
+	tick, isTick := firstTick().(clockTickMsg)
+	if !isTick {
+		t.Fatalf("working status's command returned %#v, want a clock tick", firstTick())
+	}
+	if _, secondStart := started.(zenModel).Update(agentStatusMsg{status: "working"}); secondStart != nil {
+		t.Errorf("a second working status started another clock")
+	}
+	ticked, nextTick := started.(zenModel).Update(tick)
+	if nextTick == nil {
+		t.Errorf("a tick while working scheduled no next tick")
+	}
+	if screen := ansi.Strip(ticked.(zenModel).screen()); !strings.Contains(screen, " Reading go.mod · 42s") {
+		t.Errorf("screen after a tick lacks the working row:\n%s", screen)
+	}
+	later, _ := ticked.(zenModel).Update(clockTickMsg{now: tick.now.Add(3 * time.Second)})
+	if screen := ansi.Strip(later.(zenModel).screen()); !strings.Contains(screen, " Reading go.mod · 45s") {
+		t.Errorf("screen three seconds later lacks the grown time:\n%s", screen)
+	}
+	idle, _ := later.(zenModel).Update(agentStatusMsg{status: "idle"})
+	if screen := ansi.Strip(idle.(zenModel).screen()); strings.Contains(screen, "Reading go.mod") {
+		t.Errorf("screen after the turn ended still shows the working row:\n%s", screen)
+	}
+	stopped, afterIdle := idle.(zenModel).Update(clockTickMsg{now: tick.now.Add(4 * time.Second)})
+	if afterIdle != nil || stopped.(zenModel).clockTicking {
+		t.Errorf("a tick after the turn ended scheduled another")
+	}
+}
+
+func TestFollowTranscriptSendsTheTurnOfALineWithOnlyAToolCall(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte(promptLine("2026-11-20T10:00:00.000Z", "go")+"\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	messages := followTranscriptMessages(t, path)
+	nextEntriesRead(t, messages)
+	transcript, err := os.OpenFile(path, os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		t.Fatalf("open transcript to append: %v", err)
+	}
+	_, writeErr := transcript.WriteString(`{"type":"assistant","timestamp":"2026-11-20T10:00:01.000Z","message":{` +
+		`"role":"assistant","content":[{"type":"tool_use","id":"t1","name":"Read","input":{"file_path":"C:/dev/go.mod"}}]}}` + "\n")
+	if err := errors.Join(writeErr, transcript.Close()); err != nil {
+		t.Fatalf("append tool call: %v", err)
+	}
+	read := nextEntriesRead(t, messages)
+	want := currentTurn{promptTime: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), toolCallActivity: "Reading go.mod"}
+	if len(read.entries) != 0 || !read.turn.promptTime.Equal(want.promptTime) ||
+		read.turn.toolCallActivity != want.toolCallActivity {
+		t.Errorf("message after the tool call = %+v, want no entries and the turn %+v", read, want)
 	}
 }
