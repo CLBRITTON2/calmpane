@@ -32,7 +32,8 @@ const inputMaxRows = 8
 const inputPrompt = "> "
 
 type entriesReadMsg struct {
-	entries []dialogueEntry
+	entries         []dialogueEntry
+	queueOperations []queueOperation
 }
 
 type agentStatusMsg struct {
@@ -54,8 +55,25 @@ type promptSentMsg struct {
 	err    error
 }
 
+type sendNowKeysSentMsg struct {
+	err error
+}
+
+// Claude Code's default chat:sendNow keys. Not Ctrl+Enter, which a terminal without extended keys sends as Enter.
+var sendNowKeys = []string{"ctrl+x", "ctrl+s"}
+
+type claudeInput interface {
+	PromptAgent(paneID string, prompt string) error
+	SendKeys(paneID string, keys []string) error
+}
+
+type earlyPrompt struct {
+	text   string
+	queued bool
+}
+
 type zenModel struct {
-	herdr        herdrCLI
+	claude       claudeInput
 	claudePaneID string
 	// fatal is shown alone until a key ends the view, since herdr closes the pane as soon as zen exits.
 	fatal   error
@@ -74,7 +92,7 @@ type zenModel struct {
 	newestCodeBlock *codeBlockPosition
 	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
 	// entries until a prompt entry with the same text arrives.
-	earlyPrompts []string
+	earlyPrompts []earlyPrompt
 	input        textarea.Model
 }
 
@@ -103,7 +121,7 @@ func NewPromptInput() textarea.Model {
 
 func RunZenView(herdr herdrCLI) error {
 	claudePaneID := os.Getenv(claudePaneEnv)
-	model := zenModel{herdr: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
+	model := zenModel{claude: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	transcript, err := openClaudeTranscript(herdr, claudePaneID)
 	mode, modeErr := ZenModeOfPlugin(herdr.pluginID)
@@ -177,14 +195,16 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 	reader := bufio.NewReaderSize(transcript, 1024*1024)
 	var partialLine []byte
 	unsentEntries := []dialogueEntry{}
+	unsentQueueOperations := []queueOperation{}
 	linesRead := 0
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err == io.EOF {
 			partialLine = append(partialLine, line...)
-			if len(unsentEntries) > 0 {
-				send(entriesReadMsg{entries: unsentEntries})
+			if len(unsentEntries) > 0 || len(unsentQueueOperations) > 0 {
+				send(entriesReadMsg{entries: unsentEntries, queueOperations: unsentQueueOperations})
 				unsentEntries = []dialogueEntry{}
+				unsentQueueOperations = []queueOperation{}
 			}
 			time.Sleep(200 * time.Millisecond)
 			continue
@@ -196,6 +216,10 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 		partialLine = nil
 		linesRead++
 		lineEntries, err := DialogueEntries(line)
+		var lineQueueOperations []queueOperation
+		if err == nil {
+			lineQueueOperations, err = QueueOperations(line)
+		}
 		if err != nil {
 			startLine, countErr := LineNumberAt(transcript, start)
 			if countErr != nil {
@@ -204,6 +228,10 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 			send(problemMsg{err: fmt.Errorf("Cannot read line %d of %s: %w", startLine+linesRead-1,
 				transcript.Name(), err)})
 			continue
+		}
+		for _, operation := range lineQueueOperations {
+			operation.entriesBefore = len(unsentEntries)
+			unsentQueueOperations = append(unsentQueueOperations, operation)
 		}
 		unsentEntries = append(unsentEntries, lineEntries...)
 	}
@@ -262,7 +290,13 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		return m.withSize(msg.Width, msg.Height), nil
 	case entriesReadMsg:
-		return m.withEntries(msg.entries), nil
+		return m.withEntries(msg.entries, msg.queueOperations), nil
+	case sendNowKeysSentMsg:
+		if msg.err != nil {
+			m.status = errorStyle.Render(msg.err.Error())
+			m.copyStatus = ""
+		}
+		return m, nil
 	case agentStatusMsg:
 		m.status = statusLine(msg.status)
 		m.copyStatus = ""
@@ -337,22 +371,41 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if prompt == "" {
 			return m, nil
 		}
-		m.input.Reset()
-		m = m.withVisibleRowsDrawn()
 		sendPrompt := func() tea.Msg {
-			return promptSentMsg{prompt: prompt, err: m.herdr.PromptAgent(m.claudePaneID, prompt)}
+			return promptSentMsg{prompt: prompt, err: m.claude.PromptAgent(m.claudePaneID, prompt)}
 		}
-		// Claude records a slash command as a hidden <command-name> record, which would never replace the band.
-		bandText := strings.TrimSpace(prompt)
-		if bandText == "" || strings.HasPrefix(bandText, "/") {
-			return m, sendPrompt
+		return m.withInputSent(prompt), sendPrompt
+	case "ctrl+enter":
+		prompt := m.input.Value()
+		if prompt == "" {
+			return m, func() tea.Msg {
+				return sendNowKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+			}
 		}
-		return m.withEarlyPromptAdded(bandText), sendPrompt
+		// herdr returns from agent prompt once it has written the prompt and its Enter, so the keys reach Claude after them.
+		sendPromptAndSendNow := func() tea.Msg {
+			if err := m.claude.PromptAgent(m.claudePaneID, prompt); err != nil {
+				return promptSentMsg{prompt: prompt, err: err}
+			}
+			return sendNowKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+		}
+		return m.withInputSent(prompt), sendPromptAndSendNow
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
 	// the entries take the rows the input gives up
 	return m.withVisibleRowsDrawn(), inputCmd
+}
+
+func (m zenModel) withInputSent(prompt string) zenModel {
+	m.input.Reset()
+	m = m.withVisibleRowsDrawn()
+	// Claude records a slash command as a hidden <command-name> record, which would never replace the band.
+	bandText := strings.TrimSpace(prompt)
+	if bandText == "" || strings.HasPrefix(bandText, "/") {
+		return m
+	}
+	return m.withEarlyPromptAdded(bandText)
 }
 
 // withSize redraws every entry when the width changes, since prompts and markdown wrap to it.
@@ -374,7 +427,7 @@ func (m zenModel) withSize(width int, height int) zenModel {
 }
 
 // withEntries keeps a view scrolled up on the rows it shows, by counting the new entries' rows under it.
-func (m zenModel) withEntries(entries []dialogueEntry) zenModel {
+func (m zenModel) withEntries(entries []dialogueEntry, queueOperations []queueOperation) zenModel {
 	firstNew := len(m.entries)
 	m.entries = append(m.entries, entries...)
 	m.entryRows = append(m.entryRows, make([][]string, len(entries))...)
@@ -397,40 +450,97 @@ func (m zenModel) withEntries(entries []dialogueEntry) zenModel {
 			m.rowsBelowView += len(m.entryRows[index])
 		}
 	}
-	for _, entry := range entries {
+	nextOperation := 0
+	for index, entry := range entries {
+		for ; nextOperation < len(queueOperations) && queueOperations[nextOperation].entriesBefore <= index; nextOperation++ {
+			m = m.withQueueOperation(queueOperations[nextOperation])
+		}
 		if entry.kind == promptEntry {
 			m = m.withEarlyPromptRemoved(entry.text)
 		}
 	}
+	for _, operation := range queueOperations[nextOperation:] {
+		m = m.withQueueOperation(operation)
+	}
 	return m.withVisibleRowsDrawn()
 }
 
-// withEarlyPromptAdded keeps a view scrolled up on the rows it shows, as withEntries does.
-func (m zenModel) withEarlyPromptAdded(prompt string) zenModel {
-	m.earlyPrompts = append(slices.Clone(m.earlyPrompts), prompt)
-	if m.rowsBelowView > 0 {
-		m.rowsBelowView += len(PromptEntryRows(prompt, m.width))
+func (m zenModel) withQueueOperation(operation queueOperation) zenModel {
+	isQueued := func(early earlyPrompt) bool { return early.queued }
+	isQueuedWithText := func(early earlyPrompt) bool { return early.queued && early.text == operation.text }
+	switch operation.operation {
+	case "enqueue":
+		isUnqueuedWithText := func(early earlyPrompt) bool { return !early.queued && early.text == operation.text }
+		return m.withEarlyPromptMarkedQueuedAt(slices.IndexFunc(m.earlyPrompts, isUnqueuedWithText))
+	case "dequeue":
+		return m.withEarlyPromptQueuedMarkClearedAt(slices.IndexFunc(m.earlyPrompts, isQueued))
+	case "remove":
+		switch operation.reason {
+		case "absorbed_mid_turn":
+			return m.withEarlyPromptQueuedMarkClearedAt(slices.IndexFunc(m.earlyPrompts, isQueuedWithText))
+		case "cleared_on_cancel", "not_carried_to_background":
+			return m.withEarlyPromptRemovedAt(slices.IndexFunc(m.earlyPrompts, isQueuedWithText))
+		case "dropped_by_hook":
+			return m.withEarlyPromptRemovedAt(slices.IndexFunc(m.earlyPrompts, isQueued))
+		}
 	}
-	return m.withVisibleRowsDrawn()
+	return m
+}
+
+func (m zenModel) withEarlyPromptAdded(prompt string) zenModel {
+	return m.withEarlyPrompts(append(slices.Clone(m.earlyPrompts), earlyPrompt{text: prompt}))
 }
 
 // withEarlyPromptRemoved removes the oldest early band with the prompt's text, if there is one.
 func (m zenModel) withEarlyPromptRemoved(prompt string) zenModel {
-	index := slices.Index(m.earlyPrompts, prompt)
+	return m.withEarlyPromptRemovedAt(slices.IndexFunc(m.earlyPrompts, func(early earlyPrompt) bool {
+		return early.text == prompt
+	}))
+}
+
+func (m zenModel) withEarlyPromptRemovedAt(index int) zenModel {
 	if index < 0 {
 		return m
 	}
-	m.earlyPrompts = slices.Delete(slices.Clone(m.earlyPrompts), index, index+1)
+	return m.withEarlyPrompts(slices.Delete(slices.Clone(m.earlyPrompts), index, index+1))
+}
+
+func (m zenModel) withEarlyPromptMarkedQueuedAt(index int) zenModel {
+	if index < 0 {
+		return m
+	}
+	earlyPrompts := slices.Clone(m.earlyPrompts)
+	earlyPrompts[index].queued = true
+	return m.withEarlyPrompts(earlyPrompts)
+}
+
+func (m zenModel) withEarlyPromptQueuedMarkClearedAt(index int) zenModel {
+	if index < 0 {
+		return m
+	}
+	earlyPrompts := slices.Clone(m.earlyPrompts)
+	earlyPrompts[index].queued = false
+	return m.withEarlyPrompts(earlyPrompts)
+}
+
+// withEarlyPrompts keeps a view scrolled up on the rows it shows, as withEntries does.
+func (m zenModel) withEarlyPrompts(earlyPrompts []earlyPrompt) zenModel {
+	formerRowCount := len(m.earlyPromptRows())
+	m.earlyPrompts = earlyPrompts
 	if m.rowsBelowView > 0 {
-		m.rowsBelowView = max(m.rowsBelowView-len(PromptEntryRows(prompt, m.width)), 0)
+		m.rowsBelowView = max(m.rowsBelowView+len(m.earlyPromptRows())-formerRowCount, 0)
 	}
 	return m.withVisibleRowsDrawn()
 }
 
 func (m zenModel) earlyPromptRows() []string {
 	rows := []string{}
-	for _, prompt := range m.earlyPrompts {
-		rows = append(rows, PromptEntryRows(prompt, m.width)...)
+	for _, early := range m.earlyPrompts {
+		note := ""
+		if early.queued {
+			note = queuedNote
+		}
+		rows = append(rows, PromptEntryRows(early.text, note, m.width)...)
 	}
 	return rows
 }

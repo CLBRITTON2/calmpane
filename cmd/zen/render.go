@@ -27,6 +27,7 @@ var (
 	bandStyle       = lipgloss.NewStyle().Background(lipgloss.Color(colorOverlay))
 	bandMarkerStyle = bandStyle.Foreground(lipgloss.Color(colorIris))
 	bandTextStyle   = bandStyle.Foreground(lipgloss.Color(colorText))
+	bandNoteStyle   = bandStyle.Foreground(lipgloss.Color(colorMuted))
 	questionStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGold)).Bold(true)
 	optionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
 	workingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
@@ -36,6 +37,8 @@ var (
 )
 
 const bandMarker = "▌ "
+
+const queuedNote = "queued"
 
 // replyStyle is glamour's dark style in the colors above, with no background on reply text, no # before headings and
 // no blank lines around the document.
@@ -73,7 +76,7 @@ func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer 
 	var blockRows []string
 	switch entry.kind {
 	case promptEntry:
-		return PromptEntryRows(entry.text, width), nil
+		return PromptEntryRows(entry.text, "", width), nil
 	case replyEntry:
 		replyRows, err := ReplyRows(entry.text, copyHintBlock, width, replyRenderer)
 		if err != nil {
@@ -94,18 +97,27 @@ func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer 
 	return rows, nil
 }
 
-func PromptEntryRows(prompt string, width int) []string {
-	return append([]string{""}, PromptBandRows(prompt, width)...)
+func PromptEntryRows(prompt string, note string, width int) []string {
+	return append([]string{""}, PromptBandRows(prompt, note, width)...)
 }
 
 // PromptBandRows draws a prompt on a band the full width, one band row per text row.
-func PromptBandRows(prompt string, width int) []string {
+func PromptBandRows(prompt string, note string, width int) []string {
+	noteWidth := 0
+	if note != "" {
+		// one column between the text and the note
+		noteWidth = lipgloss.Width(note) + 1
+	}
 	// one column of margin on each side of the marker and the text
-	textWidth := max(width-1-lipgloss.Width(bandMarker), 1)
+	textWidth := max(width-1-lipgloss.Width(bandMarker)-noteWidth, 1)
 	wrapped := bandTextStyle.Width(textWidth).PaddingRight(1).Render(strings.ReplaceAll(prompt, "\r\n", "\n"))
 	rows := []string{}
-	for _, textRow := range strings.Split(wrapped, "\n") {
-		rows = append(rows, bandStyle.Render(" ")+bandMarkerStyle.Render(bandMarker)+textRow)
+	for index, textRow := range strings.Split(wrapped, "\n") {
+		noteCell := bandStyle.Render(strings.Repeat(" ", noteWidth))
+		if index == 0 && note != "" {
+			noteCell = bandNoteStyle.Render(note) + bandStyle.Render(" ")
+		}
+		rows = append(rows, bandStyle.Render(" ")+bandMarkerStyle.Render(bandMarker)+textRow+noteCell)
 	}
 	return rows
 }

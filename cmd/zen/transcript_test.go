@@ -187,3 +187,47 @@ func TestTailStartWithoutNewlineAfterCutIsFileSize(t *testing.T) {
 		t.Errorf("start = %d, want %d", start, len(content))
 	}
 }
+
+func TestQueueOperationsReadsTheOperationReasonAndTypedText(t *testing.T) {
+	cases := []struct {
+		name string
+		line string
+		want []queueOperation
+	}{
+		{
+			name: "enqueue with pasted content",
+			line: `{"type":"queue-operation","operation":"enqueue","content":` +
+				`"<pasted_content id=\"a1\">\nlog line\n</pasted_content id=\"a1\">\n\nwhy"}`,
+			want: []queueOperation{{operation: "enqueue", text: "log line\n\nwhy"}},
+		},
+		{
+			name: "dequeue without text",
+			line: `{"type":"queue-operation","operation":"dequeue"}`,
+			want: []queueOperation{{operation: "dequeue"}},
+		},
+		{
+			name: "remove with its reason",
+			line: `{"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"go on"}`,
+			want: []queueOperation{{operation: "remove", reason: "absorbed_mid_turn", text: "go on"}},
+		},
+		{
+			name: "user record quoting a queue-operation type",
+			line: `{"type":"user","message":{"role":"user","content":"what is \"type\":\"queue-operation\"?"}}`,
+		},
+		{
+			name: "other record",
+			line: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"text","text":"ok"}]}}`,
+		},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			got, err := QueueOperations([]byte(testCase.line))
+			if err != nil {
+				t.Fatalf("QueueOperations: %v", err)
+			}
+			if !reflect.DeepEqual(got, testCase.want) {
+				t.Errorf("QueueOperations = %+v, want %+v", got, testCase.want)
+			}
+		})
+	}
+}

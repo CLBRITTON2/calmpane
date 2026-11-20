@@ -47,6 +47,22 @@ type transcriptRecord struct {
 	} `json:"attachment"`
 }
 
+type queueOperation struct {
+	operation string
+	reason    string
+	// text is the prompt as its band shows it, empty for a dequeue and a dropped_by_hook remove
+	text string
+	// entriesBefore counts the entries of the same read that the transcript holds before this record.
+	entriesBefore int
+}
+
+type queueOperationRecord struct {
+	Type      string `json:"type"`
+	Operation string `json:"operation"`
+	Reason    string `json:"reason"`
+	Content   string `json:"content"`
+}
+
 type contentBlock struct {
 	Type  string          `json:"type"`
 	Text  string          `json:"text"`
@@ -115,8 +131,25 @@ func promptEntries(content json.RawMessage) ([]dialogueEntry, error) {
 			return nil, nil
 		}
 	}
-	typedText := strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
-	return []dialogueEntry{{kind: promptEntry, text: typedText}}, nil
+	return []dialogueEntry{{kind: promptEntry, text: TypedText(prompt)}}, nil
+}
+
+func TypedText(prompt string) string {
+	return strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
+}
+
+func QueueOperations(line []byte) ([]queueOperation, error) {
+	if !bytes.Contains(line, []byte(`"type":"queue-operation"`)) {
+		return nil, nil
+	}
+	var record queueOperationRecord
+	if err := json.Unmarshal(line, &record); err != nil {
+		return nil, fmt.Errorf("decode transcript line %.80q: %w", line, err)
+	}
+	if record.Type != "queue-operation" {
+		return nil, nil
+	}
+	return []queueOperation{{operation: record.Operation, reason: record.Reason, text: TypedText(record.Content)}}, nil
 }
 
 func assistantEntries(content json.RawMessage) ([]dialogueEntry, error) {

@@ -96,6 +96,11 @@ func (h herdrCLI) PromptAgent(paneID string, prompt string) error {
 	return err
 }
 
+func (h herdrCLI) SendKeys(paneID string, keys []string) error {
+	_, err := h.run("pane send-keys", append([]string{paneID}, keys...)...)
+	return err
+}
+
 // OpenAndMarkZenPane marks the zen pane before it returns, so a focus hook waiting on the zen mode's mutex finds the
 // mark and opens no second zen pane for claudePaneID.
 func (h herdrCLI) OpenAndMarkZenPane(claudePaneID string) error {

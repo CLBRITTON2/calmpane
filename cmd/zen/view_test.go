@@ -137,7 +137,7 @@ func pressedKey(code rune) tea.KeyPressMsg {
 
 func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	if !strings.Contains(model.screen(), "prompt 20") {
 		t.Fatalf("screen at the bottom lacks the newest prompt:\n%s", model.screen())
 	}
@@ -147,7 +147,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest
 	if strings.Contains(before, "prompt 20") {
 		t.Fatalf("screen after PgUp still shows the newest prompt:\n%s", before)
 	}
-	scrolledModel = scrolledModel.withEntries(numberedPrompts(21, 3))
+	scrolledModel = scrolledModel.withEntries(numberedPrompts(21, 3), nil)
 	if after := scrolledModel.screen(); after != before {
 		t.Errorf("screen moved when entries arrived while scrolled up:\nbefore\n%s\nafter\n%s", before, after)
 	}
@@ -159,7 +159,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest
 
 func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 3))
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 3), nil)
 	for range 4 {
 		scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 		model = scrolled.(zenModel)
@@ -175,7 +175,7 @@ func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(
 
 func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolledUp, _ := model.Update(pressedKey(tea.KeyUp))
 	upModel := scrolledUp.(zenModel)
 	if upModel.rowsBelowView != arrowScrollRows {
@@ -196,7 +196,7 @@ func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T
 		{kind: replyEntry, text: "Old:\n\n```\nold block\n```"},
 		{kind: replyEntry, text: "New:\n\n```go\nfirst()\n```\n\n```go\nfunc f() {\n\treturn \n}\n```\n\nDone."},
 		{kind: promptEntry, text: "thanks\n\n```\nmine\n```"},
-	})
+	}, nil)
 	copied, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	copiedModel := copied.(zenModel)
 	if copyCmd == nil {
@@ -218,7 +218,7 @@ func TestCtrlYWithNoCodeBlockSaysSoAndCopiesNothing(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12).withEntries([]dialogueEntry{
 		{kind: promptEntry, text: "hello"}, {kind: replyEntry, text: "Use `inline code` only."},
-	})
+	}, nil)
 	pressed, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 	if copyCmd != nil {
 		t.Errorf("ctrl+y with no code block returned %#v, want no command", copyCmd())
@@ -239,6 +239,8 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 			wantShown: "herdr pane get failed"},
 		{name: "prompt refused", statusMsg: promptSentMsg{err: errAgentBlocked},
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
+		{name: "send-now keys refused", statusMsg: sendNowKeysSentMsg{err: errors.New("herdr pane send-keys failed")},
+			wantShown: "herdr pane send-keys failed"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -256,10 +258,10 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 
 func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(60, 40).withEntries([]dialogueEntry{{kind: replyEntry, text: "```sh\nfirst\n```"}})
+	model = model.withSize(60, 40).withEntries([]dialogueEntry{{kind: replyEntry, text: "```sh\nfirst\n```"}}, nil)
 	model = model.withEntries([]dialogueEntry{
 		{kind: promptEntry, text: "and then?"}, {kind: replyEntry, text: "```go\nsecond\n```"},
-	})
+	}, nil)
 	hintedRules := []string{}
 	for _, row := range strings.Split(ansi.Strip(model.screen()), "\n") {
 		if strings.Contains(row, copyKeyHint) {
@@ -273,7 +275,7 @@ func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
 
 func modelWithTypedPrompt(prompt string) zenModel {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(60, 20).withEntries([]dialogueEntry{{kind: replyEntry, text: "Ready."}})
+	model = model.withSize(60, 20).withEntries([]dialogueEntry{{kind: replyEntry, text: "Ready."}}, nil)
 	model.input.SetValue(prompt)
 	return model
 }
@@ -289,20 +291,20 @@ func TestEnterShowsThePromptBandAtOnceAndTheTranscriptPromptTakesItsPlace(t *tes
 	delivered, _ := sent.Update(promptSentMsg{prompt: "rename the widget", err: nil})
 	sentModel := delivered.(zenModel)
 	// a reply written before Claude records the prompt goes above the early band
-	withReply := sentModel.withEntries([]dialogueEntry{{kind: replyEntry, text: "Still on the last step."}})
+	withReply := sentModel.withEntries([]dialogueEntry{{kind: replyEntry, text: "Still on the last step."}}, nil)
 	replyText := ansi.Strip(withReply.screen())
 	replyAt := strings.Index(replyText, "Still on the last step.")
 	bandAt := strings.Index(replyText, "▌ rename the widget")
 	if replyAt < 0 || bandAt < 0 || replyAt > bandAt {
 		t.Errorf("screen lacks the reply or the early band, or has the reply under the band:\n%s", replyText)
 	}
-	recorded := withReply.withEntries([]dialogueEntry{{kind: promptEntry, text: "rename the widget"}})
+	recorded := withReply.withEntries([]dialogueEntry{{kind: promptEntry, text: "rename the widget"}}, nil)
 	recordedText := ansi.Strip(recorded.screen())
 	if count := strings.Count(recordedText, "rename the widget"); count != 1 {
 		t.Errorf("screen shows the prompt %d times after the transcript records it, want 1:\n%s", count, recordedText)
 	}
 	if len(recorded.earlyPrompts) != 0 {
-		t.Errorf("earlyPrompts = %q, want none once the transcript holds the prompt", recorded.earlyPrompts)
+		t.Errorf("earlyPrompts = %+v, want none once the transcript holds the prompt", recorded.earlyPrompts)
 	}
 }
 
@@ -331,7 +333,7 @@ func TestAFailedSendRemovesTheEarlyBandAndShowsTheRefusal(t *testing.T) {
 
 func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 	scrolledModel := scrolled.(zenModel)
 	before := scrolledModel.screen()
@@ -342,7 +344,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T)
 	if after := sentModel.screen(); after != before {
 		t.Errorf("screen moved when the early band came:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	recorded := sentModel.withEntries(numberedPrompts(21, 1))
+	recorded := sentModel.withEntries(numberedPrompts(21, 1), nil)
 	if after := recorded.screen(); after != before {
 		t.Errorf("screen moved when the transcript prompt replaced the early band:\nbefore:\n%s\nafter:\n%s", before,
 			after)
@@ -393,7 +395,7 @@ func TestTheInputWrapsALongLineUnderItsPrompt(t *testing.T) {
 
 func TestTheInputGrowsARowAtATimeUpToEightAndTheScreenKeepsItsHeight(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(60, 24).withEntries(numberedPrompts(1, 20))
+	model = model.withSize(60, 24).withEntries(numberedPrompts(1, 20), nil)
 	for lineCount := 1; lineCount <= 11; lineCount++ {
 		model.input.SetValue(strings.TrimSuffix(strings.Repeat("line\n", lineCount), "\n"))
 		model = model.withVisibleRowsDrawn()
@@ -411,8 +413,8 @@ func TestTheInputGrowsARowAtATimeUpToEightAndTheScreenKeepsItsHeight(t *testing.
 }
 
 func TestShiftEnterStartsANewLineAndEnterSendsTheTextWithItsNewlines(t *testing.T) {
-	model := zenModel{herdr: herdrCLI{binary: filepath.Join(t.TempDir(), "no-herdr.exe")}, entries: []dialogueEntry{},
-		entryRows: [][]string{}, input: NewPromptInput()}
+	model := zenModel{claude: &claudeInputRecorder{}, entries: []dialogueEntry{}, entryRows: [][]string{},
+		input: NewPromptInput()}
 	model = model.withSize(60, 24)
 	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
 	for _, keyPress := range []tea.KeyPressMsg{{Code: 'o', Text: "o"}, {Code: 'n', Text: "n"}, {Code: 'e', Text: "e"},
@@ -432,7 +434,7 @@ func TestShiftEnterStartsANewLineAndEnterSendsTheTextWithItsNewlines(t *testing.
 
 func TestUpAndDownMoveTheCursorInAnInputOfSeveralRows(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20))
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	model.input.SetValue("first\nsecond")
 	movedUp, _ := model.withKey(pressedKey(tea.KeyUp))
 	movedUpModel := movedUp.(zenModel)
@@ -451,17 +453,17 @@ func modelWithInputThenEntries(inputValue string) zenModel {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 24)
 	model.input.SetValue(inputValue)
-	return model.withEntries(numberedPrompts(1, 20))
+	return model.withEntries(numberedPrompts(1, 20), nil)
 }
 
 func TestTheEntriesFillTheRowsTheInputGivesBack(t *testing.T) {
-	model := zenModel{herdr: herdrCLI{binary: filepath.Join(t.TempDir(), "no-herdr.exe")}, entries: []dialogueEntry{},
-		entryRows: [][]string{}, input: NewPromptInput()}
+	model := zenModel{claude: &claudeInputRecorder{}, entries: []dialogueEntry{}, entryRows: [][]string{},
+		input: NewPromptInput()}
 	model = model.withSize(60, 24)
 	// Entries that arrive under a tall input are drawn only down to its top row. A slash command gets no early band
 	// to draw the entries on Enter.
 	model.input.SetValue("/x" + strings.Repeat("\nx", inputMaxRows-1))
-	model = model.withEntries(numberedPrompts(1, 20))
+	model = model.withEntries(numberedPrompts(1, 20), nil)
 	for range 8 {
 		erased, _ := model.withKey(pressedKey(tea.KeyBackspace))
 		model = erased.(zenModel)
@@ -472,5 +474,213 @@ func TestTheEntriesFillTheRowsTheInputGivesBack(t *testing.T) {
 	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
 	if screen, want := sent.(zenModel).screen(), modelWithInputThenEntries("").screen(); screen != want {
 		t.Errorf("screen after Enter cleared the input:\n%s\nwant:\n%s", screen, want)
+	}
+}
+
+// claudeInputRecorder records each send as "prompt <pane> <text>" or "keys <pane> <keys>".
+type claudeInputRecorder struct {
+	calls     []string
+	promptErr error
+}
+
+func (r *claudeInputRecorder) PromptAgent(paneID string, prompt string) error {
+	r.calls = append(r.calls, "prompt "+paneID+" "+prompt)
+	return r.promptErr
+}
+
+func (r *claudeInputRecorder) SendKeys(paneID string, keys []string) error {
+	r.calls = append(r.calls, "keys "+paneID+" "+strings.Join(keys, " "))
+	return nil
+}
+
+func modelWithSentPrompts(prompts []string) zenModel {
+	model := modelWithTypedPrompt("")
+	for _, prompt := range prompts {
+		model.input.SetValue(prompt)
+		sent, _ := model.withKey(pressedKey(tea.KeyEnter))
+		model = sent.(zenModel)
+	}
+	return model
+}
+
+func bandTextRow(model zenModel, text string) string {
+	for _, row := range strings.Split(ansi.Strip(model.screen()), "\n") {
+		if strings.Contains(row, "▌ "+text) {
+			return row
+		}
+	}
+	return ""
+}
+
+func TestAnEnqueueMarksTheBandWithItsTextAndTheMatchingRemoveClearsIt(t *testing.T) {
+	model := modelWithSentPrompts([]string{"first one", "second one"})
+	queued := model.withEntries(nil, []queueOperation{{operation: "enqueue", text: "second one"}})
+	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " queued ") {
+		t.Errorf("band row after the enqueue = %q, want it to end in the queued note", row)
+	}
+	if row := bandTextRow(queued, "first one"); strings.Contains(row, "queued") {
+		t.Errorf("band row of the other prompt = %q, want no queued note", row)
+	}
+	taken := queued.withEntries(nil, []queueOperation{
+		{operation: "remove", reason: "absorbed_mid_turn", text: "second one"},
+	})
+	if row := bandTextRow(taken, "second one"); row == "" || strings.Contains(row, "queued") {
+		t.Errorf("band row after the remove = %q, want the band without the queued note", row)
+	}
+}
+
+func TestADequeueClearsTheOldestMarkedBand(t *testing.T) {
+	model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []queueOperation{
+		{operation: "enqueue", text: "first one"}, {operation: "enqueue", text: "second one"}, {operation: "dequeue"},
+	})
+	if row := bandTextRow(model, "first one"); strings.Contains(row, "queued") {
+		t.Errorf("oldest band row after the dequeue = %q, want no queued note", row)
+	}
+	if row := bandTextRow(model, "second one"); !strings.Contains(row, "queued") {
+		t.Errorf("newer band row after the dequeue = %q, want the queued note", row)
+	}
+}
+
+func TestARemoveThatDropsThePromptRemovesItsBand(t *testing.T) {
+	cases := []queueOperation{
+		{operation: "remove", reason: "cleared_on_cancel", text: "second one"},
+		{operation: "remove", reason: "not_carried_to_background", text: "second one"},
+		{operation: "remove", reason: "dropped_by_hook"},
+	}
+	for _, removal := range cases {
+		t.Run(removal.reason, func(t *testing.T) {
+			model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []queueOperation{
+				{operation: "enqueue", text: "second one"}, removal,
+			})
+			if row := bandTextRow(model, "second one"); row != "" {
+				t.Errorf("screen still shows the removed band: %q", row)
+			}
+			if row := bandTextRow(model, "first one"); row == "" {
+				t.Errorf("screen lost the band of the prompt Claude did not queue:\n%s", ansi.Strip(model.screen()))
+			}
+		})
+	}
+}
+
+func TestQueueOperationsApplyInTheirPlaceAmongTheEntries(t *testing.T) {
+	cases := []struct {
+		name          string
+		entriesBefore int
+		wantQueued    bool
+	}{
+		{name: "enqueue before the prompt", entriesBefore: 0, wantQueued: false},
+		{name: "enqueue after the prompt", entriesBefore: 1, wantQueued: true},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := modelWithSentPrompts([]string{"again", "again"}).withEntries(
+				[]dialogueEntry{{kind: promptEntry, text: "again"}},
+				[]queueOperation{{operation: "enqueue", text: "again", entriesBefore: testCase.entriesBefore}})
+			want := []earlyPrompt{{text: "again", queued: testCase.wantQueued}}
+			if !reflect.DeepEqual(model.earlyPrompts, want) {
+				t.Errorf("earlyPrompts = %+v, want %+v", model.earlyPrompts, want)
+			}
+		})
+	}
+}
+
+func TestScreenScrolledUpStaysOnItsRowsWhenTheQueuedNoteRewrapsABand(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
+	// fits one band row at width 40, and wraps onto two short of the note
+	prompt := "prompt 21 with words that wrap now"
+	model.input.SetValue(prompt)
+	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
+	scrolled, _ := sent.(zenModel).withKey(pressedKey(tea.KeyPgUp))
+	scrolledModel := scrolled.(zenModel)
+	before := scrolledModel.screen()
+	queued := scrolledModel.withEntries(nil, []queueOperation{{operation: "enqueue", text: prompt}})
+	if len(queued.earlyPromptRows()) == len(scrolledModel.earlyPromptRows()) {
+		t.Fatalf("the queued note left the band at %d rows, want it rewrapped", len(queued.earlyPromptRows()))
+	}
+	if after := queued.screen(); after != before {
+		t.Errorf("screen moved when the band was marked:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+	taken := queued.withEntries(nil, []queueOperation{{operation: "dequeue"}})
+	if after := taken.screen(); after != before {
+		t.Errorf("screen moved when the mark was cleared:\nbefore:\n%s\nafter:\n%s", before, after)
+	}
+}
+
+func TestCtrlEnterSendsThePromptThenTheSendNowKeys(t *testing.T) {
+	cases := []struct {
+		name      string
+		typed     string
+		promptErr error
+		wantCalls []string
+		wantMsg   tea.Msg
+	}{
+		{name: "typed prompt", typed: "ship it",
+			wantCalls: []string{"prompt 3 ship it", "keys 3 ctrl+x ctrl+s"}, wantMsg: sendNowKeysSentMsg{}},
+		{name: "empty input", typed: "", wantCalls: []string{"keys 3 ctrl+x ctrl+s"}, wantMsg: sendNowKeysSentMsg{}},
+		{name: "refused prompt sends no keys", typed: "ship it", promptErr: errAgentBlocked,
+			wantCalls: []string{"prompt 3 ship it"}, wantMsg: promptSentMsg{prompt: "ship it", err: errAgentBlocked}},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := &claudeInputRecorder{promptErr: testCase.promptErr}
+			model := modelWithTypedPrompt(testCase.typed)
+			model.claude, model.claudePaneID = recorder, "3"
+			pressed, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+			if send == nil {
+				t.Fatal("ctrl+enter returned no command")
+			}
+			if value := pressed.(zenModel).input.Value(); value != "" {
+				t.Errorf("input after ctrl+enter = %q, want it cleared", value)
+			}
+			if msg := send(); !reflect.DeepEqual(msg, testCase.wantMsg) {
+				t.Errorf("ctrl+enter's command returned %#v, want %#v", msg, testCase.wantMsg)
+			}
+			if !reflect.DeepEqual(recorder.calls, testCase.wantCalls) {
+				t.Errorf("sent %q, want %q", recorder.calls, testCase.wantCalls)
+			}
+		})
+	}
+}
+
+func TestFollowTranscriptSendsQueueOperationsInTheirPlaceAmongTheEntries(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	content := `{"type":"user","message":{"role":"user","content":"first"}}` + "\n" +
+		`{"type":"queue-operation","operation":"enqueue","content":"second"}` + "\n" +
+		`{"type":"user","message":{"role":"user","content":"third"}}` + "\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	transcript, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := transcript.Close(); err != nil {
+			t.Errorf("close transcript: %v", err)
+		}
+	})
+	messages := make(chan tea.Msg, 16)
+	go func() {
+		messages <- fatalMsg{err: followTranscript(transcript, func(msg tea.Msg) { messages <- msg })}
+	}()
+	for {
+		select {
+		case msg := <-messages:
+			switch msg := msg.(type) {
+			case entriesReadMsg:
+				want := []queueOperation{{operation: "enqueue", text: "second", entriesBefore: 1}}
+				if !reflect.DeepEqual(msg.queueOperations, want) {
+					t.Errorf("queue operations = %+v, want %+v", msg.queueOperations, want)
+				}
+				return
+			case problemMsg:
+				t.Fatalf("followTranscript reported: %v", msg.err)
+			case fatalMsg:
+				t.Fatalf("followTranscript returned: %v", msg.err)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatal("no entries read after 5 s")
+		}
 	}
 }

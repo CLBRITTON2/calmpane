@@ -12,14 +12,19 @@ import (
 func TestPromptBandRowsFillTheWidthWhenThePromptWraps(t *testing.T) {
 	prompt := "make the card, name it with zen, and check that every row of the band reaches the right edge\n" +
 		"second line\twith a tab"
-	for _, width := range []int{40, 100} {
-		rows := PromptBandRows(prompt, width)
-		if len(rows) < 2 {
-			t.Fatalf("width %d: %d rows, want a row for each line of the prompt", width, len(rows))
-		}
-		for index, row := range rows {
-			if rowWidth := lipgloss.Width(row); rowWidth != width {
-				t.Errorf("width %d: row %d is %d columns wide: %q", width, index, rowWidth, row)
+	for _, note := range []string{"", queuedNote} {
+		for _, width := range []int{40, 100} {
+			rows := PromptBandRows(prompt, note, width)
+			if len(rows) < 2 {
+				t.Fatalf("width %d: %d rows, want a row for each line of the prompt", width, len(rows))
+			}
+			for index, row := range rows {
+				if rowWidth := lipgloss.Width(row); rowWidth != width {
+					t.Errorf("note %q, width %d: row %d is %d columns wide: %q", note, width, index, rowWidth, row)
+				}
+			}
+			if firstTextRow := ansi.Strip(rows[0]); note != "" && !strings.HasSuffix(firstTextRow, " "+note+" ") {
+				t.Errorf("note %q, width %d: first text row %q does not end in the note", note, width, firstTextRow)
 			}
 		}
 	}
@@ -54,7 +59,7 @@ func TestAOneLinePromptIsOneBandRowWithABlankRowBeforeTheReply(t *testing.T) {
 }
 
 func TestAWrappedPromptIsOneBandRowPerTextRow(t *testing.T) {
-	got := plainRows(PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", 30))
+	got := plainRows(PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", "", 30))
 	want := []string{" ▌ rename the widget and then", " ▌ rebuild the whole view", " ▌ second", " ▌ third"}
 	if !reflect.DeepEqual(got, want) {
 		t.Errorf("band rows = %q, want %q", got, want)
