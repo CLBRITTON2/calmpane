@@ -313,11 +313,13 @@ func statusLine(agentStatus string, turn currentTurn, now time.Time, width int) 
 		if activity == "" {
 			activity = "Working..."
 		}
+		duration := ""
 		if !turn.promptTime.IsZero() {
-			activity += " · " + TurnDuration(max(now.Sub(turn.promptTime), 0))
+			duration = " · " + TurnDuration(max(now.Sub(turn.promptTime), 0))
 		}
 		// the row's left margin takes one column
-		return workingStyle.Render(ansi.Truncate(activity, max(width-1, 0), ""))
+		activityWidth := max(width-1-ansi.StringWidth(duration), 0)
+		return workingStyle.Render(ansi.Truncate(activity, activityWidth, "") + duration)
 	default:
 		return ""
 	}

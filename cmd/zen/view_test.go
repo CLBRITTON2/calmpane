@@ -738,6 +738,11 @@ func TestTheWorkingRowNamesTheNewestToolCallOfTheTurnAndTheTimeSinceItsPrompt(t 
 			wantRow: "Working... · 42s"},
 		{name: "no prompt in the tail", lines: []string{toolCallLine("Read", `{"file_path":"a.go"}`)},
 			wantRow: "Reading a.go"},
+		{name: "prompt taken in mid-turn keeps the turn's time and tool call",
+			lines: []string{prompt, toolCallLine("Read", `{"file_path":"a.go"}`),
+				`{"type":"attachment","timestamp":"2026-11-20T10:00:30.000Z","attachment":{"type":"queued_command",` +
+					`"prompt":"also check the logs","commandMode":"prompt","origin":{"kind":"human"}}}`},
+			wantRow: "Reading a.go · 42s"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -759,10 +764,12 @@ func TestTheWorkingRowNamesTheNewestToolCallOfTheTurnAndTheTimeSinceItsPrompt(t 
 	}
 }
 
-func TestTheWorkingRowIsCutAtTheViewWidth(t *testing.T) {
-	turn := currentTurn{toolCallActivity: "Running a very long command description"}
-	if row := ansi.Strip(statusLine("working", turn, time.Time{}, 12)); row != "Running a v" {
-		t.Errorf("working row at width 12 = %q, want the 11 columns after the margin", row)
+func TestTheWorkingRowCutsTheToolCallAtTheViewWidthAndKeepsTheTime(t *testing.T) {
+	promptTime := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
+	turn := currentTurn{promptTime: promptTime, toolCallActivity: "Running a very long command description"}
+	if row := ansi.Strip(statusLine("working", turn, promptTime.Add(42*time.Second), 20)); row != "Running a ver · 42s" {
+		t.Errorf("working row at width 20 = %q, want the tool call cut to fit the time in the 19 columns after the "+
+			"margin", row)
 	}
 }
 

@@ -204,6 +204,10 @@ func TurnAfterLine(turn currentTurn, line []byte, lineEntries []dialogueEntry) (
 	if err := json.Unmarshal(line, &record); err != nil {
 		return turn, fmt.Errorf("decode transcript line %.80q: %w", line, err)
 	}
+	// A queued_command attachment is a prompt Claude took in mid-turn, so the turn it joins keeps its time.
+	if holdsPrompt && record.Type == "attachment" && !turn.promptTime.IsZero() {
+		return turn, nil
+	}
 	if holdsPrompt {
 		return currentTurn{promptTime: record.Timestamp}, nil
 	}
