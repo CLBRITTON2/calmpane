@@ -15,9 +15,9 @@ const (
 )
 
 func main() {
-	herdr := herdrCLI{binary: os.Getenv("HERDR_BIN_PATH")}
-	if herdr.binary == "" {
-		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH is not set: zen runs from a herdr plugin")
+	herdr := herdrCLI{binary: os.Getenv("HERDR_BIN_PATH"), pluginID: os.Getenv("HERDR_PLUGIN_ID")}
+	if herdr.binary == "" || herdr.pluginID == "" {
+		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH or HERDR_PLUGIN_ID is not set: zen runs from a herdr plugin")
 		os.Exit(2)
 	}
 	var err error
@@ -25,12 +25,35 @@ func main() {
 	case len(os.Args) == 1:
 		err = RunZenView(herdr)
 	case len(os.Args) == 2 && os.Args[1] == "toggle":
-		err = ToggleZenPane(herdr)
+		err = withZenMode(herdr, ToggleZenMode)
+	case len(os.Args) == 2 && os.Args[1] == "focus":
+		err = withZenMode(herdr, ShowFocusedZenView)
 	default:
-		err = errors.New("usage: zen [toggle]")
+		err = errors.New("usage: zen [toggle|focus]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func withZenMode(herdr herdrCLI, command func(herdrCLI, zenMode) error) error {
+	mode, err := ZenModeOfPlugin(herdr.pluginID)
+	if err != nil {
+		return err
+	}
+	return command(herdr, mode)
+}
+
+func ZenModeOfPlugin(pluginID string) (zenMode, error) {
+	stateDir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
+	if stateDir == "" {
+		return zenMode{}, errors.New("HERDR_PLUGIN_STATE_DIR is not set: zen runs from a herdr plugin")
+	}
+	session := os.Getenv("HERDR_SESSION")
+	if session == "" {
+		// herdr gives the session started without --session no HERDR_SESSION
+		session = "default"
+	}
+	return zenMode{stateDir: stateDir, session: session, mutexName: `Local\` + pluginID + "." + session}, nil
 }

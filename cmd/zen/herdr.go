@@ -9,13 +9,18 @@ import (
 	"strings"
 )
 
-// claudePaneToken marks a zen pane with the Claude pane it shows, so the toggle action knows to close it.
+// claudePaneToken marks a zen pane with the Claude pane it shows.
 const claudePaneToken = "claude_pane"
 
-const pluginID = "windows-dev.zen"
+// zenPaneTitle is the title of the zen pane in windows-dev's herdr/zen/herdr-plugin.toml, which herdr shows as its
+// label.
+const zenPaneTitle = "Zen"
 
 type herdrPane struct {
 	PaneID       string            `json:"pane_id"`
+	Agent        string            `json:"agent"`
+	Label        string            `json:"label"`
+	Focused      bool              `json:"focused"`
 	AgentStatus  string            `json:"agent_status"`
 	Tokens       map[string]string `json:"tokens"`
 	AgentSession *struct {
@@ -33,7 +38,8 @@ type herdrError struct {
 var errAgentBlocked = errors.New("agent_blocked")
 
 type herdrCLI struct {
-	binary string
+	binary   string
+	pluginID string
 }
 
 // subcommand is split on spaces, so an argument with a space goes in arguments. A failure names only the subcommand,
@@ -69,10 +75,20 @@ func (h herdrCLI) Pane(paneID string) (herdrPane, error) {
 	return reply.Result.Pane, nil
 }
 
-func (h herdrCLI) MarkZenPane(zenPaneID string, claudePaneID string) error {
-	_, err := h.run("pane report-metadata", zenPaneID, "--source", pluginID,
-		"--token", claudePaneToken+"="+claudePaneID)
-	return err
+func (h herdrCLI) Panes() ([]herdrPane, error) {
+	output, err := h.run("pane list")
+	if err != nil {
+		return nil, err
+	}
+	var reply struct {
+		Result struct {
+			Panes []herdrPane `json:"panes"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output, &reply); err != nil {
+		return nil, fmt.Errorf("decode herdr pane list reply %q: %w", output, err)
+	}
+	return reply.Result.Panes, nil
 }
 
 func (h herdrCLI) PromptAgent(paneID string, prompt string) error {
@@ -80,16 +96,48 @@ func (h herdrCLI) PromptAgent(paneID string, prompt string) error {
 	return err
 }
 
-func (h herdrCLI) OpenZenPaneZoomed(claudePaneID string) error {
-	_, err := h.run("plugin pane open", "--plugin", pluginID, "--entrypoint", "zen",
+// OpenAndMarkZenPane marks the zen pane before it returns, so a focus hook waiting on the zen mode's mutex finds the
+// mark and opens no second zen pane for claudePaneID.
+func (h herdrCLI) OpenAndMarkZenPane(claudePaneID string) error {
+	output, err := h.run("plugin pane open", "--plugin", h.pluginID, "--entrypoint", "zen",
 		"--placement", "zoomed", "--target-pane", claudePaneID, "--env", claudePaneEnv+"="+claudePaneID, "--focus")
+	if err != nil {
+		return err
+	}
+	var reply struct {
+		Result struct {
+			PluginPane struct {
+				Pane herdrPane `json:"pane"`
+			} `json:"plugin_pane"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output, &reply); err != nil {
+		return fmt.Errorf("decode herdr plugin pane open reply %q: %w", output, err)
+	}
+	_, err = h.run("pane report-metadata", reply.Result.PluginPane.Pane.PaneID, "--source", h.pluginID,
+		"--token", claudePaneToken+"="+claudePaneID)
 	return err
 }
 
-func (h herdrCLI) CloseZenPaneAndFocusAgent(zenPaneID string, claudePaneID string) error {
-	if _, err := h.run("plugin pane close", zenPaneID); err != nil {
+func (h herdrCLI) FocusAndZoomZenPane(zenPaneID string) error {
+	if _, err := h.run("plugin pane focus", zenPaneID); err != nil {
 		return err
 	}
-	_, err := h.run("agent focus", claudePaneID)
+	_, err := h.run("pane zoom", zenPaneID, "--on")
+	return err
+}
+
+func (h herdrCLI) ClosePane(paneID string) error {
+	_, err := h.run("pane close", paneID)
+	return err
+}
+
+func (h herdrCLI) FocusAgent(paneID string) error {
+	_, err := h.run("agent focus", paneID)
+	return err
+}
+
+func (h herdrCLI) SendText(paneID string, text string) error {
+	_, err := h.run("pane send-text", paneID, text)
 	return err
 }

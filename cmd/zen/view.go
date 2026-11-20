@@ -106,8 +106,9 @@ func RunZenView(herdr herdrCLI) error {
 	model := zenModel{herdr: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	transcript, err := openClaudeTranscript(herdr, claudePaneID)
-	model.fatal = err
-	program := tea.NewProgram(model)
+	mode, modeErr := ZenModeOfPlugin(herdr.pluginID)
+	model.fatal = errors.Join(err, modeErr)
+	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: ""})
 	if transcript != nil {
 		go func() {
 			err := followTranscript(transcript, program.Send)
@@ -119,8 +120,8 @@ func RunZenView(herdr herdrCLI) error {
 	if transcript != nil {
 		runErr = errors.Join(runErr, transcript.Close())
 	}
-	if finalModel, isZenModel := finalModel.(zenModel); isZenModel {
-		return errors.Join(finalModel.fatal, runErr)
+	if finalModel, isDraftSavingView := finalModel.(draftSavingView); isDraftSavingView {
+		return errors.Join(finalModel.zen.fatal, runErr)
 	}
 	return runErr
 }
@@ -128,9 +129,6 @@ func RunZenView(herdr herdrCLI) error {
 func openClaudeTranscript(herdr herdrCLI, claudePaneID string) (*os.File, error) {
 	if claudePaneID == "" {
 		return nil, fmt.Errorf("%s is not set: the toggle action opens the zen pane", claudePaneEnv)
-	}
-	if err := herdr.MarkZenPane(os.Getenv("HERDR_PANE_ID"), claudePaneID); err != nil {
-		return nil, err
 	}
 	claudePane, err := herdr.Pane(claudePaneID)
 	if err != nil {
