@@ -10,114 +10,97 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
-	"unicode/utf8"
+
+	"charm.land/bubbles/v2/textinput"
+	tea "charm.land/bubbletea/v2"
+	"charm.land/glamour/v2"
 )
 
-type keysRead struct {
-	keys []byte
-	err  error
+const wheelScrollRows = 3
+
+// The status line, the separator and the input line sit under the entries.
+const rowsUnderEntries = 3
+
+type entriesReadMsg struct {
+	entries []dialogueEntry
 }
 
-type entriesRead struct {
-	entries []string
-	err     error
-}
-
-type agentStatusRead struct {
+type agentStatusMsg struct {
 	status string
-	err    error
 }
 
-// A failure stays on screen until a key is pressed, since herdr closes the pane as soon as zen exits.
+// problemMsg carries a failure the view keeps running through, shown on the status line.
+type problemMsg struct {
+	err error
+}
+
+// fatalMsg carries a failure that ends the view.
+type fatalMsg struct {
+	err error
+}
+
+type promptSentMsg struct {
+	err error
+}
+
+type zenModel struct {
+	herdr        herdrCLI
+	claudePaneID string
+	// fatal is shown alone until a key ends the view, since herdr closes the pane as soon as zen exits.
+	fatal   error
+	entries []dialogueEntry
+	// entryRows holds each entry's rows at the current width, nil until drawn.
+	entryRows     [][]string
+	replyRenderer *glamour.TermRenderer
+	width         int
+	height        int
+	// rowsBelowView counts the rows under the bottom of the view, 0 when it shows the newest entry.
+	rowsBelowView int
+	status        string
+	input         textinput.Model
+}
+
 func RunZenView(herdr herdrCLI) error {
-	restoreConsole, err := MakeConsoleRaw()
-	if err != nil {
-		return err
-	}
-	keys := make(chan keysRead)
-	go readKeys(keys)
-	viewErr := showDialogue(herdr, keys)
-	_, writeErr := fmt.Fprintf(os.Stdout, "%s\r\n", viewErr)
-	keyErr := (<-keys).err
-	return errors.Join(viewErr, writeErr, keyErr, restoreConsole())
-}
-
-// keys is closed after a failed read, so a receive after the failure returns at once.
-func readKeys(keys chan<- keysRead) {
-	defer close(keys)
-	for {
-		buffer := make([]byte, 256)
-		readCount, err := os.Stdin.Read(buffer)
-		keys <- keysRead{keys: buffer[:readCount], err: err}
-		if err != nil {
-			return
-		}
-	}
-}
-
-func showDialogue(herdr herdrCLI, keys <-chan keysRead) (err error) {
 	claudePaneID := os.Getenv(claudePaneEnv)
+	input := textinput.New()
+	input.Focus()
+	model := zenModel{herdr: herdr, claudePaneID: claudePaneID, entries: []dialogueEntry{}, entryRows: [][]string{},
+		input: input}
+	transcript, err := openClaudeTranscript(herdr, claudePaneID)
+	model.fatal = err
+	program := tea.NewProgram(model)
+	if transcript != nil {
+		go func() {
+			err := followTranscript(transcript, program.Send)
+			program.Send(fatalMsg{err: fmt.Errorf("Cannot read %s: %w", transcript.Name(), err)})
+		}()
+		go pollAgentStatus(herdr, claudePaneID, program.Send)
+	}
+	finalModel, runErr := program.Run()
+	if transcript != nil {
+		runErr = errors.Join(runErr, transcript.Close())
+	}
+	if finalModel, isZenModel := finalModel.(zenModel); isZenModel {
+		return errors.Join(finalModel.fatal, runErr)
+	}
+	return runErr
+}
+
+func openClaudeTranscript(herdr herdrCLI, claudePaneID string) (*os.File, error) {
 	if claudePaneID == "" {
-		return fmt.Errorf("%s is not set: the toggle action opens the zen pane", claudePaneEnv)
+		return nil, fmt.Errorf("%s is not set: the toggle action opens the zen pane", claudePaneEnv)
 	}
 	if err := herdr.MarkZenPane(os.Getenv("HERDR_PANE_ID"), claudePaneID); err != nil {
-		return err
+		return nil, err
 	}
 	claudePane, err := herdr.Pane(claudePaneID)
 	if err != nil {
-		return err
+		return nil, err
 	}
 	if claudePane.AgentSession == nil || claudePane.AgentSession.Agent != "claude" {
-		return errors.New("No Claude session in this pane.")
+		return nil, errors.New("No Claude session in this pane.")
 	}
-	transcript, err := openTranscript(claudePane.AgentSession.Value)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		err = errors.Join(err, transcript.Close())
-	}()
-
-	entries := make(chan entriesRead)
-	go func() {
-		err := followTranscript(transcript, entries)
-		entries <- entriesRead{err: fmt.Errorf("Cannot read %s: %w", transcript.Name(), err)}
-	}()
-	statuses := make(chan agentStatusRead)
-	go pollAgentStatus(herdr, claudePaneID, statuses)
-
-	var screen zenScreen
-	if err := screen.Draw(""); err != nil {
-		return err
-	}
-	for {
-		select {
-		case read := <-entries:
-			if read.err != nil {
-				return read.err
-			}
-			for _, entry := range read.entries {
-				if err := screen.Draw(entry); err != nil {
-					return err
-				}
-			}
-		case read := <-statuses:
-			if read.err != nil {
-				return read.err
-			}
-			screen.status = statusLine(read.status)
-			if err := screen.Draw(""); err != nil {
-				return err
-			}
-		case read := <-keys:
-			if read.err != nil {
-				return fmt.Errorf("read keys: %w", read.err)
-			}
-			if err := applyKeys(&screen, herdr, claudePaneID, read.keys); err != nil {
-				return err
-			}
-		}
-	}
+	return openTranscript(claudePane.AgentSession.Value)
 }
 
 func openTranscript(sessionID string) (*os.File, error) {
@@ -140,7 +123,9 @@ func openTranscript(sessionID string) (*os.File, error) {
 	return transcript, nil
 }
 
-func followTranscript(transcript *os.File, entries chan<- entriesRead) error {
+// followTranscript sends the tail's entries in one message once it reaches the end of the file, then each new
+// line's entries as they are written.
+func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 	info, err := transcript.Stat()
 	if err != nil {
 		return err
@@ -154,10 +139,16 @@ func followTranscript(transcript *os.File, entries chan<- entriesRead) error {
 	}
 	reader := bufio.NewReaderSize(transcript, 1024*1024)
 	var partialLine []byte
+	unsentEntries := []dialogueEntry{}
+	linesRead := 0
 	for {
 		line, err := reader.ReadBytes('\n')
 		if err == io.EOF {
 			partialLine = append(partialLine, line...)
+			if len(unsentEntries) > 0 {
+				send(entriesReadMsg{entries: unsentEntries})
+				unsentEntries = []dialogueEntry{}
+			}
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
@@ -166,27 +157,49 @@ func followTranscript(transcript *os.File, entries chan<- entriesRead) error {
 		}
 		line = append(partialLine, line...)
 		partialLine = nil
+		linesRead++
 		lineEntries, err := DialogueEntries(line)
 		if err != nil {
-			return err
+			startLine, countErr := LineNumberAt(transcript, start)
+			if countErr != nil {
+				return countErr
+			}
+			send(problemMsg{err: fmt.Errorf("Cannot read line %d of %s: %w", startLine+linesRead-1,
+				transcript.Name(), err)})
+			continue
 		}
-		if len(lineEntries) > 0 {
-			entries <- entriesRead{entries: lineEntries}
+		unsentEntries = append(unsentEntries, lineEntries...)
+	}
+}
+
+// LineNumberAt is the 1-based number of the line that starts at offset.
+func LineNumberAt(file io.ReaderAt, offset int64) (int, error) {
+	reader := bufio.NewReaderSize(io.NewSectionReader(file, 0, offset), 1024*1024)
+	newlines := 0
+	for {
+		chunk, err := reader.ReadSlice('\n')
+		if len(chunk) > 0 && chunk[len(chunk)-1] == '\n' {
+			newlines++
+		}
+		if err == io.EOF {
+			return newlines + 1, nil
+		}
+		if err != nil && !errors.Is(err, bufio.ErrBufferFull) {
+			return 0, fmt.Errorf("count lines before offset %d: %w", offset, err)
 		}
 	}
 }
 
-func pollAgentStatus(herdr herdrCLI, claudePaneID string, statuses chan<- agentStatusRead) {
+// pollAgentStatus keeps polling after a failure, since the view keeps running.
+func pollAgentStatus(herdr herdrCLI, claudePaneID string, send func(tea.Msg)) {
 	lastStatus := ""
 	for {
 		pane, err := herdr.Pane(claudePaneID)
 		if err != nil {
-			statuses <- agentStatusRead{err: err}
-			return
-		}
-		if pane.AgentStatus != lastStatus {
+			send(problemMsg{err: err})
+		} else if pane.AgentStatus != lastStatus {
 			lastStatus = pane.AgentStatus
-			statuses <- agentStatusRead{status: pane.AgentStatus}
+			send(agentStatusMsg{status: pane.AgentStatus})
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -195,109 +208,183 @@ func pollAgentStatus(herdr herdrCLI, claudePaneID string, statuses chan<- agentS
 func statusLine(agentStatus string) string {
 	switch agentStatus {
 	case "blocked":
-		return "Waiting for you in Claude. Press " + toggleKey + " to answer."
+		return waitingStyle.Render("Waiting for you in Claude. Press " + toggleKey + " to answer.")
 	case "working":
-		return "Working..."
+		return workingStyle.Render("Working...")
 	default:
 		return ""
 	}
 }
 
-// Escape sequences and control keys are dropped, since the input line takes one line of plain text.
-func applyKeys(screen *zenScreen, herdr herdrCLI, claudePaneID string, keys []byte) error {
-	for len(keys) > 0 {
-		switch key := keys[0]; {
-		case key == '\r':
-			keys = keys[1:]
-			if len(screen.input) == 0 {
-				continue
-			}
-			err := herdr.PromptAgent(claudePaneID, string(screen.input))
-			if errors.Is(err, errAgentBlocked) {
-				// Shown as an entry, so it stays on screen after the status line changes.
-				if err := screen.Draw("Claude is waiting for you. Press " + toggleKey + " to answer."); err != nil {
-					return err
-				}
-				continue
-			}
-			if err != nil {
-				return err
-			}
-			screen.input = nil
-		case key == 0x7f || key == 0x08:
-			keys = keys[1:]
-			if len(screen.input) > 0 {
-				screen.input = screen.input[:len(screen.input)-1]
-			}
-		case key == 0x1b:
-			keys = keys[escapeSequenceLength(keys):]
-		case key < 0x20:
-			keys = keys[1:]
+func (m zenModel) Init() tea.Cmd {
+	return textinput.Blink
+}
+
+func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
+	switch msg := msg.(type) {
+	case tea.WindowSizeMsg:
+		return m.withSize(msg.Width, msg.Height), nil
+	case entriesReadMsg:
+		return m.withEntries(msg.entries), nil
+	case agentStatusMsg:
+		m.status = statusLine(msg.status)
+		return m, nil
+	case problemMsg:
+		m.status = errorStyle.Render(msg.err.Error())
+		return m, nil
+	case fatalMsg:
+		m.fatal = msg.err
+		return m, nil
+	case promptSentMsg:
+		switch {
+		case errors.Is(msg.err, errAgentBlocked):
+			m.status = errorStyle.Render("Claude is waiting for you. Press " + toggleKey + " to answer.")
+		case msg.err != nil:
+			m.status = errorStyle.Render(msg.err.Error())
 		default:
-			typed, size := utf8.DecodeRune(keys)
-			keys = keys[size:]
-			screen.input = append(screen.input, typed)
+			m.input.SetValue("")
+		}
+		return m, nil
+	case tea.KeyPressMsg:
+		if m.fatal != nil {
+			return m, tea.Quit
+		}
+		return m.withKey(msg)
+	case tea.MouseWheelMsg:
+		switch msg.Mouse().Button {
+		case tea.MouseWheelUp:
+			return m.withRowsBelowViewChangedBy(wheelScrollRows), nil
+		case tea.MouseWheelDown:
+			return m.withRowsBelowViewChangedBy(-wheelScrollRows), nil
+		}
+		return m, nil
+	}
+	var inputCmd tea.Cmd
+	m.input, inputCmd = m.input.Update(msg)
+	return m, inputCmd
+}
+
+func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "pgup":
+		return m.withRowsBelowViewChangedBy(m.entriesHeight()), nil
+	case "pgdown":
+		return m.withRowsBelowViewChangedBy(-m.entriesHeight()), nil
+	case "end":
+		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
+	case "enter":
+		prompt := m.input.Value()
+		if prompt == "" {
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			return promptSentMsg{err: m.herdr.PromptAgent(m.claudePaneID, prompt)}
 		}
 	}
-	return screen.Draw("")
+	var inputCmd tea.Cmd
+	m.input, inputCmd = m.input.Update(msg)
+	return m, inputCmd
 }
 
-func escapeSequenceLength(keys []byte) int {
-	if len(keys) < 2 {
-		return len(keys)
-	}
-	switch keys[1] {
-	case '[':
-		for index := 2; index < len(keys); index++ {
-			if keys[index] >= 0x40 && keys[index] <= 0x7e {
-				return index + 1
-			}
+// withSize redraws every entry when the width changes, since prompts and markdown wrap to it.
+func (m zenModel) withSize(width int, height int) zenModel {
+	if width != m.width {
+		replyRenderer, err := NewReplyRenderer(width)
+		if err != nil {
+			m.fatal = err
+			return m
 		}
-		return len(keys)
-	case 'O':
-		return min(3, len(keys))
-	default:
-		return 2
+		m.replyRenderer = replyRenderer
+		m.entryRows = make([][]string, len(m.entries))
 	}
+	m.width = width
+	m.height = height
+	// textinput draws its end-of-text cursor one cell past its width
+	m.input.SetWidth(max(width-1-len(m.input.Prompt)-1, 1))
+	return m.withVisibleRowsDrawn()
 }
 
-// zenScreen keeps the status line and the input line at the bottom while entries print above them.
-type zenScreen struct {
-	status     string
-	input      []rune
-	bottomRows int
+// withEntries keeps a view scrolled up on the rows it shows, by counting the new entries' rows under it.
+func (m zenModel) withEntries(entries []dialogueEntry) zenModel {
+	firstNew := len(m.entries)
+	m.entries = append(m.entries, entries...)
+	m.entryRows = append(m.entryRows, make([][]string, len(entries))...)
+	if m.rowsBelowView > 0 {
+		for index := firstNew; index < len(m.entries); index++ {
+			m = m.withEntryDrawn(index)
+			m.rowsBelowView += len(m.entryRows[index])
+		}
+	}
+	return m.withVisibleRowsDrawn()
 }
 
-func (s *zenScreen) Draw(entry string) error {
-	columns, err := ConsoleColumns()
+func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
+	m.rowsBelowView = max(m.rowsBelowView+rows, 0)
+	return m.withVisibleRowsDrawn()
+}
+
+func (m zenModel) entriesHeight() int {
+	return max(m.height-rowsUnderEntries, 0)
+}
+
+// withVisibleRowsDrawn draws entries from the newest back until the view is covered, so a start on a long tail
+// draws only what the screen shows, and stops a view scrolled past the oldest entry at it.
+func (m zenModel) withVisibleRowsDrawn() zenModel {
+	if m.width == 0 {
+		return m
+	}
+	rowsNeeded := m.rowsBelowView + m.entriesHeight()
+	rowsDrawn := 0
+	for index := len(m.entries) - 1; index >= 0 && rowsDrawn < rowsNeeded; index-- {
+		m = m.withEntryDrawn(index)
+		rowsDrawn += len(m.entryRows[index])
+	}
+	if rowsDrawn < rowsNeeded {
+		m.rowsBelowView = max(rowsDrawn-m.entriesHeight(), 0)
+	}
+	return m
+}
+
+// withEntryDrawn shows a failed draw on the status line and leaves the entry without rows, so it is not retried.
+func (m zenModel) withEntryDrawn(index int) zenModel {
+	if m.entryRows[index] != nil {
+		return m
+	}
+	rows, err := EntryRows(m.entries[index], m.width, m.replyRenderer)
 	if err != nil {
-		return err
+		m.status = errorStyle.Render(err.Error())
+		rows = []string{}
 	}
-	var output strings.Builder
-	if s.bottomRows > 1 {
-		fmt.Fprintf(&output, "\x1b[%dA", s.bottomRows-1)
-	}
-	output.WriteString("\r\x1b[J")
-	if entry != "" {
-		output.WriteString(strings.ReplaceAll(strings.ReplaceAll(entry, "\r\n", "\n"), "\n", "\r\n"))
-		output.WriteString("\r\n\r\n")
-	}
-	s.bottomRows = 0
-	if s.status != "" {
-		output.WriteString(s.status + "\r\n")
-		s.bottomRows += rowsOf(s.status, columns)
-	}
-	inputLine := "> " + string(s.input)
-	output.WriteString(inputLine)
-	s.bottomRows += rowsOf(inputLine, columns)
-	_, err = io.WriteString(os.Stdout, output.String())
-	return err
+	m.entryRows[index] = rows
+	return m
 }
 
-func rowsOf(line string, columns int) int {
-	width := utf8.RuneCountInString(line)
-	if width == 0 {
-		return 1
+func (m zenModel) View() tea.View {
+	var view tea.View
+	switch {
+	case m.fatal != nil:
+		view = tea.NewView(m.fatal.Error())
+	case m.width == 0:
+		view = tea.NewView("")
+	default:
+		view = tea.NewView(m.screen())
 	}
-	return (width + columns - 1) / columns
+	view.AltScreen = true
+	view.MouseMode = tea.MouseModeCellMotion
+	return view
+}
+
+func (m zenModel) screen() string {
+	height := m.entriesHeight()
+	rowsNeeded := m.rowsBelowView + height
+	rowsOldestFirst := []string{}
+	for index := len(m.entries) - 1; index >= 0 && len(rowsOldestFirst) < rowsNeeded; index-- {
+		rowsOldestFirst = append(append([]string{}, m.entryRows[index]...), rowsOldestFirst...)
+	}
+	end := max(len(rowsOldestFirst)-m.rowsBelowView, 0)
+	visible := rowsOldestFirst[max(end-height, 0):end]
+	rows := make([]string, height-len(visible), height+rowsUnderEntries)
+	rows = append(rows, visible...)
+	rows = append(rows, " "+m.status, separatorStyle.Render(strings.Repeat("─", m.width)), " "+m.input.View())
+	return strings.Join(rows, "\n")
 }

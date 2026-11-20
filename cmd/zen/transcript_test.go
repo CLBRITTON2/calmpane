@@ -10,12 +10,22 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 	cases := []struct {
 		name string
 		line string
-		want []string
+		want []dialogueEntry
 	}{
 		{
-			name: "user string prompt shown with a prompt marker",
+			name: "typed prompt shown",
 			line: `{"type":"user","message":{"role":"user","content":"rename the widget"}}`,
-			want: []string{"> rename the widget"},
+			want: []dialogueEntry{{kind: promptEntry, text: "rename the widget"}},
+		},
+		{
+			name: "isMeta user record hidden",
+			line: `{"type":"user","isMeta":true,"message":{"role":"user","content":"Continue from where you left off."}}`,
+		},
+		{
+			name: "pasted_content prompt shown as the text it holds",
+			line: `{"type":"user","message":{"role":"user","content":` +
+				`"<pasted_content id=\"a1b2\">\nbuild log line\n</pasted_content id=\"a1b2\">\n\nwhy did it fail"}}`,
+			want: []dialogueEntry{{kind: promptEntry, text: "build log line\n\nwhy did it fail"}},
 		},
 		{
 			name: "user tool_result hidden",
@@ -28,20 +38,23 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 				`{"type":"text","text":"Renaming it **now**."},` +
 				`{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}},` +
 				`{"type":"text","text":"Done."}]}}`,
-			want: []string{"Renaming it **now**.", "Done."},
+			want: []dialogueEntry{{kind: replyEntry, text: "Renaming it **now**."}, {kind: replyEntry, text: "Done."}},
 		},
 		{
 			name: "assistant with only tool_use hidden",
 			line: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t3","name":"Edit","input":{}}]}}`,
 		},
 		{
-			name: "AskUserQuestion shown as each question and its numbered options",
+			name: "AskUserQuestion shown as each question and its option labels",
 			line: `{"type":"assistant","message":{"role":"assistant","content":[{"type":"tool_use","id":"t4",` +
 				`"name":"AskUserQuestion","input":{"questions":[` +
 				`{"question":"Which color?","header":"Color","multiSelect":false,"options":[` +
 				`{"label":"Red (Recommended)","description":"warm"},{"label":"Blue","description":"cool"}]},` +
 				`{"question":"Which size?","header":"Size","multiSelect":false,"options":[{"label":"Small","description":"s"}]}]}}]}}`,
-			want: []string{"Which color?\n  1. Red (Recommended)\n  2. Blue", "Which size?\n  1. Small"},
+			want: []dialogueEntry{
+				{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}},
+				{kind: questionEntry, text: "Which size?", options: []string{"Small"}},
+			},
 		},
 		{
 			name: "attachment record hidden even when it holds a text block",
@@ -50,6 +63,10 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 		{
 			name: "system record hidden",
 			line: `{"type":"system","subtype":"info","content":"compacted"}`,
+		},
+		{
+			name: "system away_summary recap hidden",
+			line: `{"type":"system","subtype":"away_summary","content":"We're renaming the widget. Next, the tests."}`,
 		},
 		{
 			name: "file-history-snapshot record hidden",
@@ -61,6 +78,16 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 				`"echo":{"type":"assistant"}}`,
 		},
 	}
+	for _, prefix := range notPromptPrefixes {
+		cases = append(cases, struct {
+			name string
+			line string
+			want []dialogueEntry
+		}{
+			name: "user record starting with " + prefix + " hidden",
+			line: `{"type":"user","message":{"role":"user","content":"` + prefix + `>body</x>"}}`,
+		})
+	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
 			entries, err := DialogueEntries([]byte(testCase.line))
@@ -68,7 +95,7 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 				t.Fatalf("DialogueEntries: %v", err)
 			}
 			if !reflect.DeepEqual(entries, testCase.want) {
-				t.Errorf("entries = %q, want %q", entries, testCase.want)
+				t.Errorf("entries = %+v, want %+v", entries, testCase.want)
 			}
 		})
 	}

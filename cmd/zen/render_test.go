@@ -1,0 +1,72 @@
+package main
+
+import (
+	"reflect"
+	"strings"
+	"testing"
+
+	"charm.land/lipgloss/v2"
+	"github.com/charmbracelet/x/ansi"
+)
+
+func TestPromptBandRowsFillTheWidthWhenThePromptWraps(t *testing.T) {
+	prompt := "make the card, name it with zen, and check that every row of the band reaches the right edge\n" +
+		"second line\twith a tab"
+	for _, width := range []int{40, 100} {
+		rows := PromptBandRows(prompt, width)
+		if len(rows) < 4 {
+			t.Fatalf("width %d: %d rows, want a blank row, the text rows and a blank row", width, len(rows))
+		}
+		for index, row := range rows {
+			if rowWidth := lipgloss.Width(row); rowWidth != width {
+				t.Errorf("width %d: row %d is %d columns wide: %q", width, index, rowWidth, row)
+			}
+		}
+	}
+}
+
+func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
+	replyRenderer, err := NewReplyRenderer(60)
+	if err != nil {
+		t.Fatalf("NewReplyRenderer: %v", err)
+	}
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "## Plan\n\nRun `go test` now."}, 60, replyRenderer)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	plain := ansi.Strip(strings.Join(rows, "\n"))
+	if strings.ContainsAny(plain, "#`") || !strings.Contains(plain, "Plan") || !strings.Contains(plain, "go test") {
+		t.Errorf("reply rows = %q, want Plan and go test without # or backticks", plain)
+	}
+}
+
+func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
+	entry := dialogueEntry{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}}
+	rows, err := EntryRows(entry, 60, nil)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	plain := []string{}
+	for _, row := range rows {
+		plain = append(plain, strings.TrimRight(ansi.Strip(row), " "))
+	}
+	want := []string{"", " Which color?", "   1. Red (Recommended)", "   2. Blue"}
+	if !reflect.DeepEqual(plain, want) {
+		t.Errorf("question rows = %q, want %q", plain, want)
+	}
+}
+
+func TestEntryRowsIndentsTabIndentedCodeWithSpaces(t *testing.T) {
+	replyRenderer, err := NewReplyRenderer(60)
+	if err != nil {
+		t.Fatalf("NewReplyRenderer: %v", err)
+	}
+	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "```go\nfunc f() {\n\treturn\n}\n```"}, 60, replyRenderer)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	plain := ansi.Strip(strings.Join(rows, "\n"))
+	if strings.Contains(plain, "\t") || !strings.Contains(plain, "    return") {
+		t.Errorf("reply rows = %q, want return indented by spaces", plain)
+	}
+}
