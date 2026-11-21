@@ -60,7 +60,7 @@ type promptSentMsg struct {
 	err    error
 }
 
-type sendNowKeysSentMsg struct {
+type claudeKeysSentMsg struct {
 	err error
 }
 
@@ -433,7 +433,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case entriesReadMsg:
 		m.turn = msg.turn
 		return m.withEntries(msg.entries, msg.queueOperations), nil
-	case sendNowKeysSentMsg:
+	case claudeKeysSentMsg:
 		if msg.err != nil {
 			m.status = errorStyle.Render(msg.err.Error())
 			m.copyStatus = ""
@@ -536,7 +536,7 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		prompt := m.input.Value()
 		if prompt == "" {
 			return m, func() tea.Msg {
-				return sendNowKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+				return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
 			}
 		}
 		// herdr returns from agent prompt once it has written the prompt and its Enter, so the keys reach Claude after them.
@@ -544,9 +544,17 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			if err := m.claude.PromptAgent(m.claudePaneID, prompt); err != nil {
 				return promptSentMsg{prompt: prompt, err: err}
 			}
-			return sendNowKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
 		}
 		return m.withInputSent(prompt), sendPromptAndSendNow
+	case "esc":
+		// Claude takes Esc twice in a row while idle as the rewind menu, which would wait unseen behind the zen view
+		if m.agentStatus != "working" {
+			return m, nil
+		}
+		return m, func() tea.Msg {
+			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, []string{"esc"})}
+		}
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)

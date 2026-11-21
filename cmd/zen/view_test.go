@@ -426,7 +426,7 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 			wantShown: "herdr pane get failed"},
 		{name: "prompt refused", statusMsg: promptSentMsg{err: errAgentBlocked},
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
-		{name: "send-now keys refused", statusMsg: sendNowKeysSentMsg{err: errors.New("herdr pane send-keys failed")},
+		{name: "send-now keys refused", statusMsg: claudeKeysSentMsg{err: errors.New("herdr pane send-keys failed")},
 			wantShown: "herdr pane send-keys failed"},
 	}
 	for _, testCase := range cases {
@@ -803,8 +803,8 @@ func TestCtrlEnterSendsThePromptThenTheSendNowKeys(t *testing.T) {
 		wantMsg   tea.Msg
 	}{
 		{name: "typed prompt", typed: "ship it",
-			wantCalls: []string{"prompt 3 ship it", "keys 3 ctrl+x ctrl+s"}, wantMsg: sendNowKeysSentMsg{}},
-		{name: "empty input", typed: "", wantCalls: []string{"keys 3 ctrl+x ctrl+s"}, wantMsg: sendNowKeysSentMsg{}},
+			wantCalls: []string{"prompt 3 ship it", "keys 3 ctrl+x ctrl+s"}, wantMsg: claudeKeysSentMsg{}},
+		{name: "empty input", typed: "", wantCalls: []string{"keys 3 ctrl+x ctrl+s"}, wantMsg: claudeKeysSentMsg{}},
 		{name: "refused prompt sends no keys", typed: "ship it", promptErr: errAgentBlocked,
 			wantCalls: []string{"prompt 3 ship it"}, wantMsg: promptSentMsg{prompt: "ship it", err: errAgentBlocked}},
 	}
@@ -825,6 +825,36 @@ func TestCtrlEnterSendsThePromptThenTheSendNowKeys(t *testing.T) {
 			}
 			if !reflect.DeepEqual(recorder.calls, testCase.wantCalls) {
 				t.Errorf("sent %q, want %q", recorder.calls, testCase.wantCalls)
+			}
+		})
+	}
+}
+
+func TestEscSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
+	cases := []struct {
+		agentStatus string
+		wantCalls   []string
+	}{
+		{agentStatus: "working", wantCalls: []string{"keys 3 esc"}},
+		{agentStatus: "idle", wantCalls: nil},
+		{agentStatus: "blocked", wantCalls: nil},
+	}
+	for _, testCase := range cases {
+		t.Run(testCase.agentStatus, func(t *testing.T) {
+			recorder := &claudeInputRecorder{}
+			model := modelWithTypedPrompt("half typed")
+			model.claude, model.claudePaneID, model.agentStatus = recorder, "3", testCase.agentStatus
+			pressed, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+			if send != nil {
+				if msg := send(); !reflect.DeepEqual(msg, claudeKeysSentMsg{}) {
+					t.Errorf("esc's command returned %#v, want claudeKeysSentMsg{}", msg)
+				}
+			}
+			if !reflect.DeepEqual(recorder.calls, testCase.wantCalls) {
+				t.Errorf("sent %q, want %q", recorder.calls, testCase.wantCalls)
+			}
+			if value := pressed.(zenModel).input.Value(); value != "half typed" {
+				t.Errorf("input after esc = %q, want it kept", value)
 			}
 		})
 	}
