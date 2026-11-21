@@ -68,14 +68,38 @@ func Toggle(cli herdr.CLI, mode Mode) error {
 			}
 			return CloseZenPanesMoveDraftsAndFocusAgent(cli, mode, panes)
 		}
-		if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-			return fmt.Errorf("turn zen mode on: %w", err)
-		}
-		if err := OpenOrShowZenPaneOfFocusedPane(cli, mode, panes); err != nil {
-			return errors.Join(err, os.Remove(mode.ModeFile()))
-		}
-		return nil
+		return TurnOnAndOpenOrShowZenPaneOfFocusedPane(cli, mode, panes)
 	})
+}
+
+// TurnOnAndShowFocusedZenView is the action Win+A invokes before it attaches to herdr, so the client comes up in zen
+// mode whichever mode the session was left in.
+func TurnOnAndShowFocusedZenView(cli herdr.CLI, mode Mode) error {
+	return mode.WhileLocked(func() error {
+		isOn, err := mode.IsOn()
+		if err != nil {
+			return err
+		}
+		panes, err := cli.Panes()
+		if err != nil {
+			return err
+		}
+		if isOn {
+			return OpenOrShowZenPaneOfFocusedPane(cli, mode, panes)
+		}
+		return TurnOnAndOpenOrShowZenPaneOfFocusedPane(cli, mode, panes)
+	})
+}
+
+// TurnOnAndOpenOrShowZenPaneOfFocusedPane turns zen mode back off when the zen pane fails to open.
+func TurnOnAndOpenOrShowZenPaneOfFocusedPane(cli herdr.CLI, mode Mode, panes []herdr.Pane) error {
+	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
+		return fmt.Errorf("turn zen mode on: %w", err)
+	}
+	if err := OpenOrShowZenPaneOfFocusedPane(cli, mode, panes); err != nil {
+		return errors.Join(err, os.Remove(mode.ModeFile()))
+	}
+	return nil
 }
 
 // ShowFocusedZenView is the pane.focused and pane.agent_detected hook. herdr starts hooks without waiting for earlier

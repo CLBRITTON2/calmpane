@@ -368,3 +368,66 @@ func altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane(t *testing.T) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
 	}
 }
+
+func TestTurnOn(t *testing.T) {
+	t.Run("turnOnWhileOffTurnsZenModeOnAndOpensZenViewOfFocusedClaudePane",
+		turnOnWhileOffTurnsZenModeOnAndOpensZenViewOfFocusedClaudePane)
+	t.Run("turnOnWhileOnKeepsZenModeOnAndShowsExistingZenPane", turnOnWhileOnKeepsZenModeOnAndShowsExistingZenPane)
+	t.Run("turnOnWhileOnKeepsZenModeOnWhenZenPaneFailsToOpen", turnOnWhileOnKeepsZenModeOnWhenZenPaneFailsToOpen)
+}
+
+func turnOnWhileOffTurnsZenModeOnAndOpensZenViewOfFocusedClaudePane(t *testing.T) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-empty.ansi", "")
+	if err := TurnOnAndShowFocusedZenView(cli, mode); err != nil {
+		t.Fatal(err)
+	}
+	if isOn, err := mode.IsOn(); err != nil || !isOn {
+		t.Errorf("IsOn = %v, %v, want true", isOn, err)
+	}
+	want := []string{
+		"pane list",
+		"pane read w1:p1 --source visible --format ansi",
+		"plugin pane open --plugin zen-test --entrypoint zen --placement zoomed --target-pane w1:p1 --env " +
+			"ZEN_CLAUDE_PANE=w1:p1 --focus",
+		"pane report-metadata w1:z1 --source zen-test --token claude_pane=w1:p1",
+	}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func turnOnWhileOnKeepsZenModeOnAndShowsExistingZenPane(t *testing.T) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p3", "w1:p1", false)})
+	mode := testMode(t)
+	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := TurnOnAndShowFocusedZenView(cli, mode); err != nil {
+		t.Fatal(err)
+	}
+	if isOn, err := mode.IsOn(); err != nil || !isOn {
+		t.Errorf("IsOn = %v, %v, want true", isOn, err)
+	}
+	want := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func turnOnWhileOnKeepsZenModeOnWhenZenPaneFailsToOpen(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
+	err := TurnOnAndShowFocusedZenView(cli, mode)
+	if err == nil || !strings.Contains(err.Error(), "pane w1:p1 still holds text") {
+		t.Errorf("TurnOnAndShowFocusedZenView = %v, want an error naming pane w1:p1", err)
+	}
+	if isOn, err := mode.IsOn(); err != nil || !isOn {
+		t.Errorf("IsOn = %v, %v, want true", isOn, err)
+	}
+}

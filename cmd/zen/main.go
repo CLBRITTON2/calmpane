@@ -25,6 +25,8 @@ func main() {
 		err = ui.RunZenView(cli)
 	case len(os.Args) == 2 && os.Args[1] == "toggle":
 		err = withZenMode(cli, zenmode.Toggle)
+	case len(os.Args) == 2 && os.Args[1] == "on":
+		err = withZenMode(cli, zenmode.TurnOnAndShowFocusedZenView)
 	case len(os.Args) == 2 && os.Args[1] == "focus":
 		err = withZenMode(cli, zenmode.ShowFocusedZenView)
 	case len(os.Args) == 3 && os.Args[1] == "focus-agent":
@@ -37,7 +39,7 @@ func main() {
 			return zenmode.FocusAgentOrItsZenPane(cli, mode, agentNumber)
 		})
 	default:
-		err = errors.New("usage: zen [toggle|focus|focus-agent <number>]")
+		err = errors.New("usage: zen [toggle|on|focus|focus-agent <number>]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
