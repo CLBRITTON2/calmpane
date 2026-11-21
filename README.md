@@ -10,6 +10,8 @@ prompts from it.
 go install github.com/CLBRITTON2/herdr-zen/cmd/zen@latest
 ```
 
+From a clone, `make` installs it and `make test` vets and tests it.
+
 `zen.exe` runs as a herdr plugin. The plugin manifest and key bindings live in
 [windows-dev](https://github.com/CLBRITTON2/windows-dev) (`herdr/zen`, `herdr/config.toml`).
 
