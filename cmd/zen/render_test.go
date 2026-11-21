@@ -9,7 +9,17 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestPromptBandRowsFillTheWidthWhenThePromptWraps(t *testing.T) {
+func TestEntryRows(t *testing.T) {
+	t.Run("promptBandRowsFillWidthWhenPromptWraps", promptBandRowsFillWidthWhenPromptWraps)
+	t.Run("oneLinePromptIsOneBandRowWithBlankRowBeforeReply", oneLinePromptIsOneBandRowWithBlankRowBeforeReply)
+	t.Run("wrappedPromptIsOneBandRowPerTextRow", wrappedPromptIsOneBandRowPerTextRow)
+	t.Run("replyRowsDropHeadingAndCodeMarkers", replyRowsDropHeadingAndCodeMarkers)
+	t.Run("replyRowsDrawInlineCodeWithoutBackground", replyRowsDrawInlineCodeWithoutBackground)
+	t.Run("questionRowsNumberOptionsFromOne", questionRowsNumberOptionsFromOne)
+	t.Run("replyRowsIndentTabIndentedCodeWithSpaces", replyRowsIndentTabIndentedCodeWithSpaces)
+}
+
+func promptBandRowsFillWidthWhenPromptWraps(t *testing.T) {
 	prompt := "make the card, name it with zen, and check that every row of the band reaches the right edge\n" +
 		"second line\twith a tab"
 	for _, note := range []string{"", queuedNote} {
@@ -38,7 +48,7 @@ func plainRows(rows []string) []string {
 	return plain
 }
 
-func TestAOneLinePromptIsOneBandRowWithABlankRowBeforeTheReply(t *testing.T) {
+func oneLinePromptIsOneBandRowWithBlankRowBeforeReply(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(40)
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
@@ -58,7 +68,7 @@ func TestAOneLinePromptIsOneBandRowWithABlankRowBeforeTheReply(t *testing.T) {
 	}
 }
 
-func TestAWrappedPromptIsOneBandRowPerTextRow(t *testing.T) {
+func wrappedPromptIsOneBandRowPerTextRow(t *testing.T) {
 	got := plainRows(PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", "", 30))
 	want := []string{" ▌ rename the widget and then", " ▌ rebuild the whole view", " ▌ second", " ▌ third"}
 	if !reflect.DeepEqual(got, want) {
@@ -66,7 +76,7 @@ func TestAWrappedPromptIsOneBandRowPerTextRow(t *testing.T) {
 	}
 }
 
-func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
+func replyRowsDropHeadingAndCodeMarkers(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(60)
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
@@ -82,7 +92,7 @@ func TestEntryRowsDropsHeadingAndCodeMarkersFromReply(t *testing.T) {
 	}
 }
 
-func TestInlineCodeInAReplyHasNoBackground(t *testing.T) {
+func replyRowsDrawInlineCodeWithoutBackground(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(60)
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
@@ -96,7 +106,7 @@ func TestInlineCodeInAReplyHasNoBackground(t *testing.T) {
 	}
 }
 
-func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
+func questionRowsNumberOptionsFromOne(t *testing.T) {
 	entry := dialogueEntry{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}}
 	rows, err := EntryRows(entry, -1, 60, nil)
 	if err != nil {
@@ -109,7 +119,7 @@ func TestEntryRowsNumbersQuestionOptionsFromOne(t *testing.T) {
 	}
 }
 
-func TestEntryRowsIndentsTabIndentedCodeWithSpaces(t *testing.T) {
+func replyRowsIndentTabIndentedCodeWithSpaces(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(60)
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)

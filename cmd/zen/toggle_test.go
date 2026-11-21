@@ -186,7 +186,12 @@ func zenPane(paneID string, claudePaneID string, focused bool) herdrPane {
 		Tokens: map[string]string{claudePaneToken: claudePaneID}}
 }
 
-func TestZenPaneActionOpensAZenViewOnlyForAClaudePaneWithoutOneAndShowsAnExistingOne(t *testing.T) {
+func TestZenPaneAction(t *testing.T) {
+	t.Run("zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne",
+		zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne)
+}
+
+func zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne(t *testing.T) {
 	cases := []struct {
 		name  string
 		panes []herdrPane
@@ -226,7 +231,13 @@ func TestZenPaneActionOpensAZenViewOnlyForAClaudePaneWithoutOneAndShowsAnExistin
 	}
 }
 
-func TestTheFocusHookDoesNothingWhileZenModeIsOff(t *testing.T) {
+func TestFocusHook(t *testing.T) {
+	t.Run("focusHookDoesNothingWhileZenModeIsOff", focusHookDoesNothingWhileZenModeIsOff)
+	t.Run("focusHookShowsExistingZenPaneOfFocusedClaudePane", focusHookShowsExistingZenPaneOfFocusedClaudePane)
+	t.Run("focusHooksRunTogetherOpenOneZenPaneForClaudePane", focusHooksRunTogetherOpenOneZenPaneForClaudePane)
+}
+
+func focusHookDoesNothingWhileZenModeIsOff(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	if err := ShowFocusedZenView(herdr, mode); err != nil {
 		t.Fatal(err)
@@ -236,7 +247,7 @@ func TestTheFocusHookDoesNothingWhileZenModeIsOff(t *testing.T) {
 	}
 }
 
-func TestTheFocusHookShowsTheExistingZenPaneOfTheFocusedClaudePane(t *testing.T) {
+func focusHookShowsExistingZenPaneOfFocusedClaudePane(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true), zenPane("w1:p3", "w1:p1", false)})
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
@@ -250,7 +261,14 @@ func TestTheFocusHookShowsTheExistingZenPaneOfTheFocusedClaudePane(t *testing.T)
 	}
 }
 
-func TestFocusAgentFocusesTheNumberedAgentWhileZenModeIsOff(t *testing.T) {
+func TestFocusAgent(t *testing.T) {
+	t.Run("focusAgentFocusesNumberedAgentWhileZenModeIsOff", focusAgentFocusesNumberedAgentWhileZenModeIsOff)
+	t.Run("focusAgentShowsZenPaneOfNumberedAgentWithoutFocusingAgent", focusAgentShowsZenPaneOfNumberedAgentWithoutFocusingAgent)
+	t.Run("focusAgentFocusesNumberedAgentWithoutZenPaneForFocusHookToOpenOne", focusAgentFocusesNumberedAgentWithoutZenPaneForFocusHookToOpenOne)
+	t.Run("focusAgentFailsForNumberPastLastAgent", focusAgentFailsForNumberPastLastAgent)
+}
+
+func focusAgentFocusesNumberedAgentWhileZenModeIsOff(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true), claudePane("w2:p1", false)})
 	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err != nil {
 		t.Fatal(err)
@@ -261,7 +279,7 @@ func TestFocusAgentFocusesTheNumberedAgentWhileZenModeIsOff(t *testing.T) {
 	}
 }
 
-func TestFocusAgentShowsTheZenPaneOfTheNumberedAgentWithoutFocusingTheAgent(t *testing.T) {
+func focusAgentShowsZenPaneOfNumberedAgentWithoutFocusingAgent(t *testing.T) {
 	agentZenPane := zenPane("w1:p4", "w1:p3", false)
 	agentZenPane.TabID = "w1:t2"
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", false), zenPane("w1:p2", "w1:p1", true),
@@ -278,7 +296,7 @@ func TestFocusAgentShowsTheZenPaneOfTheNumberedAgentWithoutFocusingTheAgent(t *t
 	}
 }
 
-func TestFocusAgentFocusesTheNumberedAgentWithoutAZenPaneForTheFocusHookToOpenOne(t *testing.T) {
+func focusAgentFocusesNumberedAgentWithoutZenPaneForFocusHookToOpenOne(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", false), zenPane("w1:p2", "w1:p1", true),
 		claudePane("w2:p1", false)})
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
@@ -293,7 +311,7 @@ func TestFocusAgentFocusesTheNumberedAgentWithoutAZenPaneForTheFocusHookToOpenOn
 	}
 }
 
-func TestFocusAgentFailsForANumberPastTheLastAgent(t *testing.T) {
+func focusAgentFailsForNumberPastLastAgent(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err == nil {
 		t.Fatal("FocusAgentOrItsZenPane(2) with one agent returned no error")
@@ -304,7 +322,7 @@ func TestFocusAgentFailsForANumberPastTheLastAgent(t *testing.T) {
 	}
 }
 
-func TestFocusHooksRunTogetherOpenOneZenPaneForTheClaudePane(t *testing.T) {
+func focusHooksRunTogetherOpenOneZenPaneForClaudePane(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
@@ -332,7 +350,20 @@ func TestFocusHooksRunTogetherOpenOneZenPaneForTheClaudePane(t *testing.T) {
 	}
 }
 
-func TestAltXTurnsZenModeOnMovesClaudesDraftAfterTheZenDraftAndOpensAndMarksTheZenView(t *testing.T) {
+func TestToggle(t *testing.T) {
+	t.Run("altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView",
+		altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView)
+	t.Run("altXMovesWrappedDraftOutOfClaudesInputAsOneLine", altXMovesWrappedDraftOutOfClaudesInputAsOneLine)
+	t.Run("altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude", altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude)
+	t.Run("altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys",
+		altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys)
+	t.Run("altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane",
+		altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane)
+	t.Run("altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane", altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane)
+	t.Run("zenViewSavesUnsentTextAsDraftOfItsClaudePane", zenViewSavesUnsentTextAsDraftOfItsClaudePane)
+}
+
+func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	ShowOnFakeScreen(t, "w1:p1", "claude-input-one-row.ansi", "claude-input-empty.ansi")
 	if err := os.WriteFile(mode.DraftFile("w1:p1"), []byte("left by a closed zen pane"), 0o644); err != nil {
@@ -369,7 +400,7 @@ func assertDraft(t *testing.T, draftFile string, want string) {
 	}
 }
 
-func TestAltXMovesAWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
+func altXMovesWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	ShowOnFakeScreen(t, "w1:p1", "claude-input-wrapped.ansi", "claude-input-empty.ansi")
 	if err := ToggleZenMode(herdr, mode); err != nil {
@@ -382,7 +413,7 @@ func TestAltXMovesAWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
 		"input box, so pane read drops the space at the wrap")
 }
 
-func TestAltXSendsNoKeyAndMovesNothingFromAPlaceholderAnEmptyBoxOrABlockedClaude(t *testing.T) {
+func altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude(t *testing.T) {
 	blockedPane := claudePane("w1:p1", true)
 	blockedPane.AgentStatus = "blocked"
 	cases := []struct {
@@ -413,7 +444,7 @@ func TestAltXSendsNoKeyAndMovesNothingFromAPlaceholderAnEmptyBoxOrABlockedClaude
 	}
 }
 
-func TestAltXFailsNamingThePaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterTheClearKeys(t *testing.T) {
+func altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
 	ShowOnFakeScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
 	err := ToggleZenMode(herdr, mode)
@@ -433,7 +464,7 @@ func TestAltXFailsNamingThePaneAndMovesNothingWhenClaudesInputStillHoldsTextAfte
 	}
 }
 
-func TestAltXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesTheClaudePane(t *testing.T) {
+func altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{
 		claudePane("w1:p1", false),
 		zenPane("w1:p2", "w1:p1", true),
@@ -476,7 +507,7 @@ func TestAltXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesTheClaudePa
 	}
 }
 
-func TestAltXTurningZenModeOffLeavesTheFocusOnAPaneThatIsNotAZenPane(t *testing.T) {
+func altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane(t *testing.T) {
 	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true), zenPane("w1:p2", "w1:p3", false),
 		claudePane("w1:p3", false)})
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
@@ -491,7 +522,7 @@ func TestAltXTurningZenModeOffLeavesTheFocusOnAPaneThatIsNotAZenPane(t *testing.
 	}
 }
 
-func TestTheZenViewSavesItsUnsentTextAsTheDraftOfItsClaudePane(t *testing.T) {
+func zenViewSavesUnsentTextAsDraftOfItsClaudePane(t *testing.T) {
 	draftFile := filepath.Join(t.TempDir(), "draft")
 	var view tea.Model = draftSavingView{zen: zenModel{entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}, draftFile: draftFile, savedDraft: ""}

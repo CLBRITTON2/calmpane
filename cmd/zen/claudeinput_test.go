@@ -6,7 +6,11 @@ import (
 	"testing"
 )
 
-func TestClaudeInputBoxOnScreenGivesTheTypedDraftAndNoPlaceholder(t *testing.T) {
+func TestClaudeInputBox(t *testing.T) {
+	t.Run("inputBoxOnScreenGivesTypedDraftAndNoPlaceholder", inputBoxOnScreenGivesTypedDraftAndNoPlaceholder)
+}
+
+func inputBoxOnScreenGivesTypedDraftAndNoPlaceholder(t *testing.T) {
 	cases := []struct {
 		capture string
 		want    claudeInputBox

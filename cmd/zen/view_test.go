@@ -16,7 +16,11 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestLineNumberAtCountsTheLinesBeforeTheOffset(t *testing.T) {
+func TestLineNumberAt(t *testing.T) {
+	t.Run("lineNumberAtCountsLinesBeforeOffset", lineNumberAtCountsLinesBeforeOffset)
+}
+
+func lineNumberAtCountsLinesBeforeOffset(t *testing.T) {
 	content := "first\nsecond\nthird\n"
 	cases := []struct {
 		offset int64
@@ -37,7 +41,21 @@ func TestLineNumberAtCountsTheLinesBeforeTheOffset(t *testing.T) {
 	}
 }
 
-func TestTheZenViewWaitsForANewClaudeSessionAndItsFirstPromptBeforeOpeningTheTranscript(t *testing.T) {
+func TestConversationSession(t *testing.T) {
+	t.Run("zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript",
+		zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript)
+	t.Run("conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened", conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened)
+	t.Run("zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened",
+		zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened)
+	t.Run("conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile", conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile)
+	t.Run("conversationSessionIDFailsWhenJobStateHasNoSessionID", conversationSessionIDFailsWhenJobStateHasNoSessionID)
+	t.Run("lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting", lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting)
+	t.Run("lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry", lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry)
+	t.Run("conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob",
+		conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob)
+}
+
+func zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	herdr, _, _ := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
@@ -112,7 +130,7 @@ func writeTestJobState(t *testing.T, home string, jobID string, stateJSON string
 	}
 }
 
-func TestConversationSessionIDIsTheSessionOfTheLastBackgroundJobResumeOpened(t *testing.T) {
+func conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
@@ -134,7 +152,7 @@ func TestConversationSessionIDIsTheSessionOfTheLastBackgroundJobResumeOpened(t *
 
 const resumeOpenedJobLine = `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening \"second\", running in the background (26f6d8f1)</local-command-stdout>"}` + "\n"
 
-func TestTheZenViewFollowsTheTranscriptAndStatusLineOfTheBackgroundSessionResumeOpened(t *testing.T) {
+func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
@@ -163,7 +181,7 @@ func TestTheZenViewFollowsTheTranscriptAndStatusLineOfTheBackgroundSessionResume
 	}
 }
 
-func TestConversationSessionIDFailsWithoutWaitingWhenTheJobHasNoStateFile(t *testing.T) {
+func conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
@@ -177,7 +195,7 @@ func TestConversationSessionIDFailsWithoutWaitingWhenTheJobHasNoStateFile(t *tes
 	}
 }
 
-func TestConversationSessionIDFailsWhenTheJobStateHasNoSessionID(t *testing.T) {
+func conversationSessionIDFailsWhenJobStateHasNoSessionID(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
@@ -189,7 +207,7 @@ func TestConversationSessionIDFailsWhenTheJobStateHasNoSessionID(t *testing.T) {
 	}
 }
 
-func TestLastOpenedBackgroundJobSkipsTheLastLineClaudeIsStillWriting(t *testing.T) {
+func lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting(t *testing.T) {
 	transcript := resumeOpenedJobLine + `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening`
 	got, err := LastOpenedBackgroundJob(strings.NewReader(transcript))
 	if err != nil {
@@ -200,7 +218,7 @@ func TestLastOpenedBackgroundJobSkipsTheLastLineClaudeIsStillWriting(t *testing.
 	}
 }
 
-func TestLastOpenedBackgroundJobNamesTheUndecodableLocalCommandEntry(t *testing.T) {
+func lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry(t *testing.T) {
 	transcript := `{"type":"system","subtype":"local_command","content":"cut` + "\n"
 	_, err := LastOpenedBackgroundJob(strings.NewReader(transcript))
 	if err == nil || !strings.Contains(err.Error(), "decode local command entry") {
@@ -208,7 +226,7 @@ func TestLastOpenedBackgroundJobNamesTheUndecodableLocalCommandEntry(t *testing.
 	}
 }
 
-func TestConversationSessionIDIsTheReportedSessionWhenResumeOpenedNoBackgroundJob(t *testing.T) {
+func conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	const sessionID = "6da29299-87e9-4418-8fa0-53925bdf322e"
@@ -222,7 +240,13 @@ func TestConversationSessionIDIsTheReportedSessionWhenResumeOpenedNoBackgroundJo
 	}
 }
 
-func TestFollowTranscriptNamesTheUndecodableLineAndKeepsReading(t *testing.T) {
+func TestFollowTranscript(t *testing.T) {
+	t.Run("followTranscriptNamesUndecodableLineAndKeepsReading", followTranscriptNamesUndecodableLineAndKeepsReading)
+	t.Run("followTranscriptSendsQueueOperationsInTheirPlaceAmongEntries", followTranscriptSendsQueueOperationsInTheirPlaceAmongEntries)
+	t.Run("followTranscriptSendsTurnOfLineWithOnlyToolCall", followTranscriptSendsTurnOfLineWithOnlyToolCall)
+}
+
+func followTranscriptNamesUndecodableLineAndKeepsReading(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := `{"type":"user","message":{"role":"user","content":"first"}}` + "\n" +
 		`{"type":"user","message":{"role":"user","content":"cut` + "\n" +
@@ -268,7 +292,16 @@ func TestFollowTranscriptNamesTheUndecodableLineAndKeepsReading(t *testing.T) {
 	}
 }
 
-func TestEnterClearsTheInputAtOnceAndAFailedSendPutsTheWholeTextBack(t *testing.T) {
+func TestPromptSend(t *testing.T) {
+	t.Run("enterClearsInputAtOnceAndFailedSendPutsWholeTextBack", enterClearsInputAtOnceAndFailedSendPutsWholeTextBack)
+	t.Run("enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace", enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace)
+	t.Run("enterGivesSlashCommandNoEarlyBand", enterGivesSlashCommandNoEarlyBand)
+	t.Run("failedSendRemovesEarlyBandAndShowsRefusal", failedSendRemovesEarlyBandAndShowsRefusal)
+	t.Run("shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines", shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines)
+	t.Run("ctrlEnterSendsPromptThenSendNowKeys", ctrlEnterSendsPromptThenSendNowKeys)
+}
+
+func enterClearsInputAtOnceAndFailedSendPutsWholeTextBack(t *testing.T) {
 	cases := []struct {
 		name       string
 		err        error
@@ -322,7 +355,17 @@ func pressedKey(code rune) tea.KeyPressMsg {
 	return tea.KeyPressMsg{Code: code}
 }
 
-func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest(t *testing.T) {
+func TestScrolling(t *testing.T) {
+	t.Run("screenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToNewest",
+		screenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToNewest)
+	t.Run("screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest", screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest)
+	t.Run("upScrollsBackThreeRowsAndDownReturns", upScrollsBackThreeRowsAndDownReturns)
+	t.Run("screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes", screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes)
+	t.Run("screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand", screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand)
+	t.Run("screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped", screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped)
+}
+
+func screenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToNewest(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	if !strings.Contains(model.screen(), "prompt 20") {
@@ -344,7 +387,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToTheNewest
 	}
 }
 
-func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(t *testing.T) {
+func screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 3), nil)
 	for range 4 {
@@ -360,7 +403,7 @@ func TestScreenScrolledPastTheOldestEntryStopsThereAndOnePgDnReturnsToTheNewest(
 	}
 }
 
-func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
+func upScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolledUp, _ := model.Update(pressedKey(tea.KeyUp))
@@ -377,7 +420,14 @@ func TestUpScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 	}
 }
 
-func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T) {
+func TestCopy(t *testing.T) {
+	t.Run("ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey", ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey)
+	t.Run("ctrlYSaysSoAndCopiesNothingWithNoCodeBlock", ctrlYSaysSoAndCopiesNothingWithNoCodeBlock)
+	t.Run("newStatusReplacesCopyStatus", newStatusReplacesCopyStatus)
+	t.Run("copyHintMovesToNewestCodeBlockWhenReplyBringsOne", copyHintMovesToNewestCodeBlockWhenReplyBringsOne)
+}
+
+func ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 30).withEntries([]dialogueEntry{
 		{kind: replyEntry, text: "Old:\n\n```\nold block\n```"},
@@ -401,7 +451,7 @@ func TestCtrlYCopiesTheNewestCodeBlockAndShowsCopiedUntilTheNextKey(t *testing.T
 	}
 }
 
-func TestCtrlYWithNoCodeBlockSaysSoAndCopiesNothing(t *testing.T) {
+func ctrlYSaysSoAndCopiesNothingWithNoCodeBlock(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12).withEntries([]dialogueEntry{
 		{kind: promptEntry, text: "hello"}, {kind: replyEntry, text: "Use `inline code` only."},
@@ -415,7 +465,7 @@ func TestCtrlYWithNoCodeBlockSaysSoAndCopiesNothing(t *testing.T) {
 	}
 }
 
-func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
+func newStatusReplacesCopyStatus(t *testing.T) {
 	cases := []struct {
 		name      string
 		statusMsg tea.Msg
@@ -446,7 +496,7 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 	}
 }
 
-func TestTheCopyHintMovesToTheNewestCodeBlockWhenAReplyBringsOne(t *testing.T) {
+func copyHintMovesToNewestCodeBlockWhenReplyBringsOne(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 40).withEntries([]dialogueEntry{{kind: replyEntry, text: "```sh\nfirst\n```"}}, nil)
 	model = model.withEntries([]dialogueEntry{
@@ -470,7 +520,7 @@ func modelWithTypedPrompt(prompt string) zenModel {
 	return model
 }
 
-func TestEnterShowsThePromptBandAtOnceAndTheTranscriptPromptTakesItsPlace(t *testing.T) {
+func enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace(t *testing.T) {
 	sent, sendPrompt := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
 	if sendPrompt == nil {
 		t.Fatal("Enter returned no command to send the prompt")
@@ -498,7 +548,7 @@ func TestEnterShowsThePromptBandAtOnceAndTheTranscriptPromptTakesItsPlace(t *tes
 	}
 }
 
-func TestASlashCommandGetsNoEarlyBand(t *testing.T) {
+func enterGivesSlashCommandNoEarlyBand(t *testing.T) {
 	sent, sendPrompt := modelWithTypedPrompt("/compact").withKey(pressedKey(tea.KeyEnter))
 	if sendPrompt == nil {
 		t.Fatal("Enter returned no command to send the slash command")
@@ -508,7 +558,7 @@ func TestASlashCommandGetsNoEarlyBand(t *testing.T) {
 	}
 }
 
-func TestAFailedSendRemovesTheEarlyBandAndShowsTheRefusal(t *testing.T) {
+func failedSendRemovesEarlyBandAndShowsRefusal(t *testing.T) {
 	sent, _ := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
 	refused, _ := sent.(zenModel).Update(promptSentMsg{prompt: "rename the widget", err: errAgentBlocked})
 	refusedModel := refused.(zenModel)
@@ -521,7 +571,7 @@ func TestAFailedSendRemovesTheEarlyBandAndShowsTheRefusal(t *testing.T) {
 	}
 }
 
-func TestScreenScrolledUpStaysOnItsRowsWhenAnEarlyBandComesAndGoes(t *testing.T) {
+func screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
@@ -554,7 +604,14 @@ func inputRows(t *testing.T, model zenModel) []string {
 	return nil
 }
 
-func TestTheInputWrapsALongLineUnderItsPrompt(t *testing.T) {
+func TestInput(t *testing.T) {
+	t.Run("inputWrapsLongLineUnderItsPrompt", inputWrapsLongLineUnderItsPrompt)
+	t.Run("inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight", inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight)
+	t.Run("upAndDownMoveCursorInInputOfSeveralRows", upAndDownMoveCursorInInputOfSeveralRows)
+	t.Run("entriesFillRowsInputGivesBack", entriesFillRowsInputGivesBack)
+}
+
+func inputWrapsLongLineUnderItsPrompt(t *testing.T) {
 	words := strings.Repeat("wrap these words ", 12)
 	for _, width := range []int{40, 90} {
 		model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
@@ -583,7 +640,7 @@ func TestTheInputWrapsALongLineUnderItsPrompt(t *testing.T) {
 	}
 }
 
-func TestTheInputGrowsARowAtATimeUpToEightAndTheScreenKeepsItsHeight(t *testing.T) {
+func inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 24).withEntries(numberedPrompts(1, 20), nil)
 	for lineCount := 1; lineCount <= 11; lineCount++ {
@@ -602,7 +659,7 @@ func TestTheInputGrowsARowAtATimeUpToEightAndTheScreenKeepsItsHeight(t *testing.
 	}
 }
 
-func TestShiftEnterStartsANewLineAndEnterSendsTheTextWithItsNewlines(t *testing.T) {
+func shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines(t *testing.T) {
 	model := zenModel{claude: &claudeInputRecorder{}, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	model = model.withSize(60, 24)
@@ -622,7 +679,7 @@ func TestShiftEnterStartsANewLineAndEnterSendsTheTextWithItsNewlines(t *testing.
 	}
 }
 
-func TestUpAndDownMoveTheCursorInAnInputOfSeveralRows(t *testing.T) {
+func upAndDownMoveCursorInInputOfSeveralRows(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	model.input.SetValue("first\nsecond")
@@ -646,7 +703,7 @@ func modelWithInputThenEntries(inputValue string) zenModel {
 	return model.withEntries(numberedPrompts(1, 20), nil)
 }
 
-func TestTheEntriesFillTheRowsTheInputGivesBack(t *testing.T) {
+func entriesFillRowsInputGivesBack(t *testing.T) {
 	model := zenModel{claude: &claudeInputRecorder{}, entries: []dialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	model = model.withSize(60, 24)
@@ -715,7 +772,14 @@ func bandTextRow(model zenModel, text string) string {
 	return ""
 }
 
-func TestAnEnqueueMarksTheBandWithItsTextAndTheMatchingRemoveClearsIt(t *testing.T) {
+func TestQueuedPrompts(t *testing.T) {
+	t.Run("enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt", enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt)
+	t.Run("dequeueClearsOldestMarkedBand", dequeueClearsOldestMarkedBand)
+	t.Run("removeThatDropsPromptRemovesItsBand", removeThatDropsPromptRemovesItsBand)
+	t.Run("queueOperationsApplyInTheirPlaceAmongEntries", queueOperationsApplyInTheirPlaceAmongEntries)
+}
+
+func enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"})
 	queued := model.withEntries(nil, []queueOperation{{operation: "enqueue", text: "second one"}})
 	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " "+queuedNote+" ") {
@@ -732,7 +796,7 @@ func TestAnEnqueueMarksTheBandWithItsTextAndTheMatchingRemoveClearsIt(t *testing
 	}
 }
 
-func TestADequeueClearsTheOldestMarkedBand(t *testing.T) {
+func dequeueClearsOldestMarkedBand(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []queueOperation{
 		{operation: "enqueue", text: "first one"}, {operation: "enqueue", text: "second one"}, {operation: "dequeue"},
 	})
@@ -744,7 +808,7 @@ func TestADequeueClearsTheOldestMarkedBand(t *testing.T) {
 	}
 }
 
-func TestARemoveThatDropsThePromptRemovesItsBand(t *testing.T) {
+func removeThatDropsPromptRemovesItsBand(t *testing.T) {
 	cases := []queueOperation{
 		{operation: "remove", reason: "cleared_on_cancel", text: "second one"},
 		{operation: "remove", reason: "not_carried_to_background", text: "second one"},
@@ -765,7 +829,7 @@ func TestARemoveThatDropsThePromptRemovesItsBand(t *testing.T) {
 	}
 }
 
-func TestQueueOperationsApplyInTheirPlaceAmongTheEntries(t *testing.T) {
+func queueOperationsApplyInTheirPlaceAmongEntries(t *testing.T) {
 	cases := []struct {
 		name          string
 		entriesBefore int
@@ -787,7 +851,7 @@ func TestQueueOperationsApplyInTheirPlaceAmongTheEntries(t *testing.T) {
 	}
 }
 
-func TestScreenScrolledUpStaysOnItsRowsWhenTheQueuedNoteRewrapsABand(t *testing.T) {
+func screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	// fits one band row at width 40, and wraps onto two short of the note
@@ -810,7 +874,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenTheQueuedNoteRewrapsABand(t *testing.
 	}
 }
 
-func TestCtrlEnterSendsThePromptThenTheSendNowKeys(t *testing.T) {
+func ctrlEnterSendsPromptThenSendNowKeys(t *testing.T) {
 	cases := []struct {
 		name      string
 		typed     string
@@ -846,7 +910,14 @@ func TestCtrlEnterSendsThePromptThenTheSendNowKeys(t *testing.T) {
 	}
 }
 
-func TestEscSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
+func TestEsc(t *testing.T) {
+	t.Run("escSendsEscToClaudeOnlyWhileItWorks", escSendsEscToClaudeOnlyWhileItWorks)
+	t.Run("escBeforeReplyMovesPromptClaudePutBackIntoZenInput", escBeforeReplyMovesPromptClaudePutBackIntoZenInput)
+	t.Run("cancelledPromptRestoreKeepsEntriesWhenNewestIsNotThatPrompt", cancelledPromptRestoreKeepsEntriesWhenNewestIsNotThatPrompt)
+	t.Run("cancelledPromptRestoreChangesNothingWhenClaudeGaveNoPromptBack", cancelledPromptRestoreChangesNothingWhenClaudeGaveNoPromptBack)
+}
+
+func escSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
 	cases := []struct {
 		agentStatus string
 		wantCalls   []string
@@ -885,7 +956,7 @@ func readTestScreen(t *testing.T, capture string) string {
 	return string(screen)
 }
 
-func TestEscBeforeTheReplyMovesThePromptClaudePutBackIntoTheZenInput(t *testing.T) {
+func escBeforeReplyMovesPromptClaudePutBackIntoZenInput(t *testing.T) {
 	recorder := &claudeInputRecorder{screens: []string{
 		readTestScreen(t, "claude-input-one-row.ansi"), readTestScreen(t, "claude-input-empty.ansi"),
 	}}
@@ -917,7 +988,7 @@ func TestEscBeforeTheReplyMovesThePromptClaudePutBackIntoTheZenInput(t *testing.
 	}
 }
 
-func TestCancelledPromptRestoredKeepsTheEntriesWhenTheNewestIsNotThatPrompt(t *testing.T) {
+func cancelledPromptRestoreKeepsEntriesWhenNewestIsNotThatPrompt(t *testing.T) {
 	model := modelWithTypedPrompt("")
 	model = model.withEntries([]dialogueEntry{{kind: promptEntry, text: "move this draft"},
 		{kind: replyEntry, text: "Moved."}}, nil)
@@ -930,7 +1001,7 @@ func TestCancelledPromptRestoredKeepsTheEntriesWhenTheNewestIsNotThatPrompt(t *t
 	}
 }
 
-func TestCancelledPromptRestoredChangesNothingWhenClaudeGaveNoPromptBack(t *testing.T) {
+func cancelledPromptRestoreChangesNothingWhenClaudeGaveNoPromptBack(t *testing.T) {
 	model := modelWithTypedPrompt("typed since")
 	model = model.withEntries([]dialogueEntry{{kind: promptEntry, text: "move this draft"}}, nil)
 	restored := model.withCancelledPromptRestored("")
@@ -940,7 +1011,7 @@ func TestCancelledPromptRestoredChangesNothingWhenClaudeGaveNoPromptBack(t *test
 	}
 }
 
-func TestScreenScrolledUpStaysOnItsRowsWhenTheCancelledPromptIsDropped(t *testing.T) {
+func screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
@@ -957,7 +1028,7 @@ func TestScreenScrolledUpStaysOnItsRowsWhenTheCancelledPromptIsDropped(t *testin
 	}
 }
 
-func TestFollowTranscriptSendsQueueOperationsInTheirPlaceAmongTheEntries(t *testing.T) {
+func followTranscriptSendsQueueOperationsInTheirPlaceAmongEntries(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	content := `{"type":"user","message":{"role":"user","content":"first"}}` + "\n" +
 		`{"type":"queue-operation","operation":"enqueue","content":"second"}` + "\n" +
@@ -1016,7 +1087,18 @@ func toolCallLine(toolName string, input string) string {
 		`{"type":"text","text":"On it."},{"type":"tool_use","id":"t1","name":"` + toolName + `","input":` + input + `}]}}`
 }
 
-func TestTheWorkingRowNamesTheNewestToolCallOfTheTurnAndTheTimeSinceItsPrompt(t *testing.T) {
+func TestStatusRow(t *testing.T) {
+	t.Run("workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt", workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt)
+	t.Run("workingRowCutsToolCallAtViewWidthAndKeepsTime", workingRowCutsToolCallAtViewWidthAndKeepsTime)
+	t.Run("turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne",
+		turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne)
+	t.Run("blockedAndIdleRowsShowNoToolCallOrTime", blockedAndIdleRowsShowNoToolCallOrTime)
+	t.Run("clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds", clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds)
+	t.Run("doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain", doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain)
+	t.Run("doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking", doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking)
+}
+
+func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 	prompt := promptLine("2026-11-20T10:00:00.000Z", "go")
 	now := time.Date(2026, 11, 20, 10, 0, 42, 500_000_000, time.UTC)
 	cases := []struct {
@@ -1078,7 +1160,7 @@ func TestTheWorkingRowNamesTheNewestToolCallOfTheTurnAndTheTimeSinceItsPrompt(t 
 	}
 }
 
-func TestTheWorkingRowCutsTheToolCallAtTheViewWidthAndKeepsTheTime(t *testing.T) {
+func workingRowCutsToolCallAtViewWidthAndKeepsTime(t *testing.T) {
 	promptTime := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	turn := currentTurn{promptTime: promptTime, toolCallActivity: "Running a very long command description"}
 	if row := ansi.Strip(statusLine("working", turn, promptTime.Add(42*time.Second), 20)); row != "Running a ver · 42s" {
@@ -1087,7 +1169,7 @@ func TestTheWorkingRowCutsTheToolCallAtTheViewWidthAndKeepsTheTime(t *testing.T)
 	}
 }
 
-func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne(t *testing.T) {
+func turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne(t *testing.T) {
 	cases := []struct {
 		elapsed time.Duration
 		want    string
@@ -1106,7 +1188,7 @@ func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFro
 	}
 }
 
-func TestTheBlockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
+func blockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
 	turn := currentTurn{promptTime: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), toolCallActivity: "Reading go.mod"}
 	now := turn.promptTime.Add(42 * time.Second)
 	if row := ansi.Strip(statusLine("blocked", turn, now, 80)); row != "Waiting for you in Claude. Press alt+x to answer." {
@@ -1117,7 +1199,7 @@ func TestTheBlockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
 	}
 }
 
-func TestTheClockTicksWhileWorkingAndTheRowClearsWhenTheTurnEnds(t *testing.T) {
+func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-42 * time.Second)
@@ -1154,7 +1236,7 @@ func TestTheClockTicksWhileWorkingAndTheRowClearsWhenTheTurnEnds(t *testing.T) {
 	}
 }
 
-func TestTheDoneRowShowsTheTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) {
+func doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) {
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-time.Hour)
@@ -1182,7 +1264,7 @@ func TestTheDoneRowShowsTheTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *t
 	}
 }
 
-func TestTheDoneRowStaysHiddenWhenAnEscInterruptedTheTurnOrClaudeWasNeverSeenWorking(t *testing.T) {
+func doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking(t *testing.T) {
 	recorder := &claudeInputRecorder{screens: []string{readTestScreen(t, "claude-input-empty.ansi")}}
 	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12)
@@ -1199,7 +1281,7 @@ func TestTheDoneRowStaysHiddenWhenAnEscInterruptedTheTurnOrClaudeWasNeverSeenWor
 	}
 }
 
-func TestFollowTranscriptSendsTheTurnOfALineWithOnlyAToolCall(t *testing.T) {
+func followTranscriptSendsTurnOfLineWithOnlyToolCall(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session.jsonl")
 	if err := os.WriteFile(path, []byte(promptLine("2026-11-20T10:00:00.000Z", "go")+"\n"), 0o600); err != nil {
 		t.Fatalf("write transcript: %v", err)

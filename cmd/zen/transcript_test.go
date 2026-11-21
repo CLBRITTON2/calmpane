@@ -6,7 +6,11 @@ import (
 	"testing"
 )
 
-func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
+func TestDialogueEntries(t *testing.T) {
+	t.Run("dialogueEntriesShowOnlyDialogue", dialogueEntriesShowOnlyDialogue)
+}
+
+func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 	cases := []struct {
 		name string
 		line string
@@ -128,7 +132,15 @@ func TestDialogueEntriesShowsOnlyDialogue(t *testing.T) {
 	}
 }
 
-func TestTailStartSkipsCutFirstLine(t *testing.T) {
+func TestTailStart(t *testing.T) {
+	t.Run("tailStartSkipsCutFirstLine", tailStartSkipsCutFirstLine)
+	t.Run("tailStartKeepsFirstLineCutAtItsStart", tailStartKeepsFirstLineCutAtItsStart)
+	t.Run("tailStartReadsFileUnderTailBytesWhole", tailStartReadsFileUnderTailBytesWhole)
+	t.Run("tailStartFindsNewlinePastFirstChunk", tailStartFindsNewlinePastFirstChunk)
+	t.Run("tailStartIsFileSizeWithoutNewlineAfterCut", tailStartIsFileSizeWithoutNewlineAfterCut)
+}
+
+func tailStartSkipsCutFirstLine(t *testing.T) {
 	content := []byte("first line\nsecond line\nthird\n")
 	tailBytes := int64(len("cond line\nthird\n"))
 	start, err := TailStart(bytes.NewReader(content), int64(len(content)), tailBytes)
@@ -140,7 +152,7 @@ func TestTailStartSkipsCutFirstLine(t *testing.T) {
 	}
 }
 
-func TestTailStartKeepsFirstLineCutAtItsStart(t *testing.T) {
+func tailStartKeepsFirstLineCutAtItsStart(t *testing.T) {
 	content := []byte("first line\nsecond line\nthird\n")
 	tailBytes := int64(len("second line\nthird\n"))
 	start, err := TailStart(bytes.NewReader(content), int64(len(content)), tailBytes)
@@ -152,7 +164,7 @@ func TestTailStartKeepsFirstLineCutAtItsStart(t *testing.T) {
 	}
 }
 
-func TestTailStartReadsFileUnderTailBytesWhole(t *testing.T) {
+func tailStartReadsFileUnderTailBytesWhole(t *testing.T) {
 	content := []byte("first line\nsecond line\n")
 	start, err := TailStart(bytes.NewReader(content), int64(len(content)), 2*1024*1024)
 	if err != nil {
@@ -163,7 +175,7 @@ func TestTailStartReadsFileUnderTailBytesWhole(t *testing.T) {
 	}
 }
 
-func TestTailStartFindsNewlinePastFirstChunk(t *testing.T) {
+func tailStartFindsNewlinePastFirstChunk(t *testing.T) {
 	content := append([]byte("first\n"), bytes.Repeat([]byte("x"), 70*1024)...)
 	content = append(content, []byte("\nlast\n")...)
 	tailBytes := int64(len(content) - len("first\n") - 1)
@@ -176,7 +188,7 @@ func TestTailStartFindsNewlinePastFirstChunk(t *testing.T) {
 	}
 }
 
-func TestTailStartWithoutNewlineAfterCutIsFileSize(t *testing.T) {
+func tailStartIsFileSizeWithoutNewlineAfterCut(t *testing.T) {
 	content := []byte("first line\nsecond line without end")
 	tailBytes := int64(len("line without end"))
 	start, err := TailStart(bytes.NewReader(content), int64(len(content)), tailBytes)
@@ -188,7 +200,11 @@ func TestTailStartWithoutNewlineAfterCutIsFileSize(t *testing.T) {
 	}
 }
 
-func TestQueueOperationsReadsTheOperationReasonAndTypedText(t *testing.T) {
+func TestQueueOperations(t *testing.T) {
+	t.Run("queueOperationsReadOperationReasonAndTypedText", queueOperationsReadOperationReasonAndTypedText)
+}
+
+func queueOperationsReadOperationReasonAndTypedText(t *testing.T) {
 	cases := []struct {
 		name string
 		line string

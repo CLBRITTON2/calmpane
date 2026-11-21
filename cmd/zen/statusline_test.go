@@ -20,7 +20,14 @@ func modelWithClaudeStatusLine(line string) zenModel {
 	return updated.(zenModel)
 }
 
-func TestTheClaudeStatusLineIsDrawnUnderASeparatorClosingTheInputWithItsColorsAndCutAtTheWidth(t *testing.T) {
+func TestRowsAroundInput(t *testing.T) {
+	t.Run("claudeStatusLineDrawnUnderSeparatorWithItsColorsAndCutAtWidth", claudeStatusLineDrawnUnderSeparatorWithItsColorsAndCutAtWidth)
+	t.Run("blankRowSeparatesNewestEntryFromWorkingRow", blankRowSeparatesNewestEntryFromWorkingRow)
+	t.Run("newestEntrySitsRightAboveEmptyStatusRowWithNoStatus", newestEntrySitsRightAboveEmptyStatusRowWithNoStatus)
+	t.Run("inputIsLastRowWithNoClaudeStatusLine", inputIsLastRowWithNoClaudeStatusLine)
+}
+
+func claudeStatusLineDrawnUnderSeparatorWithItsColorsAndCutAtWidth(t *testing.T) {
 	line := roseLocation + " \x1b[38;2;156;207;216m" + strings.Repeat("Opus 5.5 ", 8) + "\x1b[0m"
 	model := modelWithClaudeStatusLine(line)
 	rows := strings.Split(model.screen(), "\n")
@@ -45,7 +52,7 @@ func TestTheClaudeStatusLineIsDrawnUnderASeparatorClosingTheInputWithItsColorsAn
 	}
 }
 
-func TestABlankRowSeparatesTheNewestEntryFromTheWorkingRow(t *testing.T) {
+func blankRowSeparatesNewestEntryFromWorkingRow(t *testing.T) {
 	model := modelWithClaudeStatusLine(roseLocation)
 	model.agentStatus = "working"
 	rows := strings.Split(model.screen(), "\n")
@@ -60,7 +67,7 @@ func TestABlankRowSeparatesTheNewestEntryFromTheWorkingRow(t *testing.T) {
 	}
 }
 
-func TestWithNoStatusTheNewestEntrySitsRightAboveTheEmptyStatusRow(t *testing.T) {
+func newestEntrySitsRightAboveEmptyStatusRowWithNoStatus(t *testing.T) {
 	model := modelWithClaudeStatusLine(roseLocation)
 	rows := strings.Split(model.screen(), "\n")
 	if newest := ansi.Strip(rows[6]); !strings.Contains(newest, "prompt 20") {
@@ -71,7 +78,7 @@ func TestWithNoStatusTheNewestEntrySitsRightAboveTheEmptyStatusRow(t *testing.T)
 	}
 }
 
-func TestWithNoClaudeStatusLineTheInputIsTheLastRow(t *testing.T) {
+func inputIsLastRowWithNoClaudeStatusLine(t *testing.T) {
 	neverShown := modelWithClaudeStatusLine("")
 	rows := strings.Split(ansi.Strip(neverShown.screen()), "\n")
 	if len(rows) != 12 {
@@ -109,7 +116,12 @@ func writeStatusLineFile(t *testing.T, path string, content string) {
 	}
 }
 
-func TestFollowClaudeStatusLineSendsEachWholeLineAndNoneWhenTheFileGoes(t *testing.T) {
+func TestFollowClaudeStatusLine(t *testing.T) {
+	t.Run("followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes", followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes)
+	t.Run("followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt", followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt)
+}
+
+func followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session-id")
 	messages := make(chan tea.Msg, 16)
 	go followClaudeStatusLine(path, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
@@ -132,7 +144,7 @@ func TestFollowClaudeStatusLineSendsEachWholeLineAndNoneWhenTheFileGoes(t *testi
 	}
 }
 
-func TestFollowClaudeStatusLineReportsAnUnreadableFileAsAProblemNamingIt(t *testing.T) {
+func followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt(t *testing.T) {
 	path := t.TempDir()
 	messages := make(chan tea.Msg, 16)
 	go followClaudeStatusLine(path, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })

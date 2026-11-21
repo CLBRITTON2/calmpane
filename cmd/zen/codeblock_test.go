@@ -8,7 +8,15 @@ import (
 	"github.com/charmbracelet/x/ansi"
 )
 
-func TestReplyRowsFrameEachCodeBlockWithRulesTheReplyWidthAndHintOnlyTheNumberedBlock(t *testing.T) {
+func TestCodeBlocks(t *testing.T) {
+	t.Run("replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock", replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock)
+	t.Run("codeFrameRowsWrapLongLineInsideFrame", codeFrameRowsWrapLongLineInsideFrame)
+	t.Run("topRuleDropsHintThenLanguageWhenTooNarrow", topRuleDropsHintThenLanguageWhenTooNarrow)
+	t.Run("replyRowsKeepTextAroundCodeBlock", replyRowsKeepTextAroundCodeBlock)
+	t.Run("codeBlocksHoldCodeExactlyAsInReply", codeBlocksHoldCodeExactlyAsInReply)
+}
+
+func replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t *testing.T) {
 	reply := "Run this:\n\n```powershell\nGet-Process zen |\n\tStop-Process -Force\n```\n\nThen this:\n\n```\nherdr --remote claude-vm\n```\n\nDone."
 	for _, width := range []int{40, 100} {
 		replyRenderer, err := NewReplyRenderer(width)
@@ -68,7 +76,7 @@ func TestReplyRowsFrameEachCodeBlockWithRulesTheReplyWidthAndHintOnlyTheNumbered
 	}
 }
 
-func TestCodeFrameRowsWrapALongLineInsideTheFrame(t *testing.T) {
+func codeFrameRowsWrapLongLineInsideFrame(t *testing.T) {
 	block := codeBlock{code: "Get-Process -Name zen | Stop-Process -Force -PassThru -Verbose", language: "powershell"}
 	rows, err := CodeFrameRows(block, "", 30)
 	if err != nil {
@@ -89,7 +97,7 @@ func TestCodeFrameRowsWrapALongLineInsideTheFrame(t *testing.T) {
 	}
 }
 
-func TestTopRuleDropsTheHintThenTheLanguageWhenTooNarrow(t *testing.T) {
+func topRuleDropsHintThenLanguageWhenTooNarrow(t *testing.T) {
 	cases := []struct {
 		width int
 		want  string
@@ -105,7 +113,7 @@ func TestTopRuleDropsTheHintThenTheLanguageWhenTooNarrow(t *testing.T) {
 	}
 }
 
-func TestReplyRowsKeepTheTextAroundACodeBlock(t *testing.T) {
+func replyRowsKeepTextAroundCodeBlock(t *testing.T) {
 	// the rules of a frame in a reply 60 columns wide, which draws 58
 	shTopRule := "╭─ sh " + strings.Repeat("─", 51) + "╮"
 	plainTopRule := "╭" + strings.Repeat("─", 56) + "╮"
@@ -145,7 +153,7 @@ func TestReplyRowsKeepTheTextAroundACodeBlock(t *testing.T) {
 	}
 }
 
-func TestCodeBlocksHoldTheCodeExactlyAsInTheReply(t *testing.T) {
+func codeBlocksHoldCodeExactlyAsInReply(t *testing.T) {
 	cases := []struct {
 		name  string
 		reply string
