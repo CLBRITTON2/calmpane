@@ -4,6 +4,10 @@ A distraction-free view of a Claude Code pane in [herdr](https://github.com/herd
 questions, without tool calls, tool results or thinking. It opens zoomed over the Claude pane, and you type and send
 prompts from it.
 
+> [!NOTE]
+> Zen only hides the clutter to make Claude's replies easier to read. It does not replace watching what the agent
+> does: always stay aware of the commands it runs and the files it changes, in the Claude pane itself (alt+x).
+
 ## Install
 
 ```
