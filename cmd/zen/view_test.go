@@ -428,6 +428,9 @@ func TestANewStatusReplacesTheCopyStatus(t *testing.T) {
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
 		{name: "send-now keys refused", statusMsg: claudeKeysSentMsg{err: errors.New("herdr pane send-keys failed")},
 			wantShown: "herdr pane send-keys failed"},
+		{name: "Claude's input not taken",
+			statusMsg: agentInputTakenMsg{err: errors.New("Claude's input in pane 3 still holds text after ctrl+u")},
+			wantShown: "still holds text after ctrl+u"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -668,6 +671,19 @@ func TestTheEntriesFillTheRowsTheInputGivesBack(t *testing.T) {
 type claudeInputRecorder struct {
 	calls     []string
 	promptErr error
+	// screens are the pane reads StyledScreen returns in turn, the last one again once they run out.
+	screens []string
+}
+
+func (r *claudeInputRecorder) StyledScreen(paneID string) (string, error) {
+	if len(r.screens) == 0 {
+		return "", nil
+	}
+	screen := r.screens[0]
+	if len(r.screens) > 1 {
+		r.screens = r.screens[1:]
+	}
+	return screen, nil
 }
 
 func (r *claudeInputRecorder) PromptAgent(paneID string, prompt string) error {
@@ -702,7 +718,7 @@ func bandTextRow(model zenModel, text string) string {
 func TestAnEnqueueMarksTheBandWithItsTextAndTheMatchingRemoveClearsIt(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"})
 	queued := model.withEntries(nil, []queueOperation{{operation: "enqueue", text: "second one"}})
-	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " queued ") {
+	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " "+queuedNote+" ") {
 		t.Errorf("band row after the enqueue = %q, want it to end in the queued note", row)
 	}
 	if row := bandTextRow(queued, "first one"); strings.Contains(row, "queued") {
@@ -857,6 +873,87 @@ func TestEscSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
 				t.Errorf("input after esc = %q, want it kept", value)
 			}
 		})
+	}
+}
+
+func readTestScreen(t *testing.T, capture string) string {
+	t.Helper()
+	screen, err := os.ReadFile(filepath.Join("testdata", capture))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return string(screen)
+}
+
+func TestEscBeforeTheReplyMovesThePromptClaudePutBackIntoTheZenInput(t *testing.T) {
+	recorder := &claudeInputRecorder{screens: []string{
+		readTestScreen(t, "claude-input-one-row.ansi"), readTestScreen(t, "claude-input-empty.ansi"),
+	}}
+	model := modelWithTypedPrompt("typed since")
+	model = model.withEntries([]dialogueEntry{{kind: promptEntry, text: "move this draft"}}, nil)
+	model.claude, model.claudePaneID, model.agentStatus = recorder, "3", "working"
+	pressed, sendEsc := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	sendEsc()
+	stopped, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: "done"})
+	if takeInput == nil {
+		t.Fatal("Claude stopping after Esc returned no command to take its input")
+	}
+	taken := takeInput()
+	if !reflect.DeepEqual(taken, agentInputTakenMsg{text: "move this draft"}) {
+		t.Fatalf("take input returned %#v, want the prompt Claude put back", taken)
+	}
+	if want := []string{"keys 3 esc", "keys 3 ctrl+u ctrl+u"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Errorf("sent %q, want %q", recorder.calls, want)
+	}
+	restored, _ := stopped.(zenModel).Update(taken)
+	if value := restored.(zenModel).input.Value(); value != "move this draft\ntyped since" {
+		t.Errorf("input = %q, want the cancelled prompt ahead of the text typed since", value)
+	}
+	if screenText := ansi.Strip(restored.(zenModel).screen()); strings.Contains(screenText, "▌ move this draft") {
+		t.Errorf("the cancelled prompt's band still shows:\n%s", screenText)
+	}
+	if _, again := restored.(zenModel).Update(agentStatusMsg{status: "idle"}); again != nil {
+		t.Error("a later status change took Claude's input again")
+	}
+}
+
+func TestCancelledPromptRestoredKeepsTheEntriesWhenTheNewestIsNotThatPrompt(t *testing.T) {
+	model := modelWithTypedPrompt("")
+	model = model.withEntries([]dialogueEntry{{kind: promptEntry, text: "move this draft"},
+		{kind: replyEntry, text: "Moved."}}, nil)
+	restored := model.withCancelledPromptRestored("move this draft")
+	if len(restored.entries) != len(model.entries) || len(restored.entryRows) != len(model.entryRows) {
+		t.Errorf("entries = %d, want all %d kept", len(restored.entries), len(model.entries))
+	}
+	if value := restored.input.Value(); value != "move this draft" {
+		t.Errorf("input = %q, want the cancelled prompt", value)
+	}
+}
+
+func TestCancelledPromptRestoredChangesNothingWhenClaudeGaveNoPromptBack(t *testing.T) {
+	model := modelWithTypedPrompt("typed since")
+	model = model.withEntries([]dialogueEntry{{kind: promptEntry, text: "move this draft"}}, nil)
+	restored := model.withCancelledPromptRestored("")
+	if len(restored.entries) != len(model.entries) || restored.input.Value() != "typed since" {
+		t.Errorf("entries = %d and input = %q, want %d and %q", len(restored.entries), restored.input.Value(),
+			len(model.entries), "typed since")
+	}
+}
+
+func TestScreenScrolledUpStaysOnItsRowsWhenTheCancelledPromptIsDropped(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
+	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
+	before := scrolled.(zenModel).screen()
+	restored := scrolled.(zenModel).withCancelledPromptRestored("prompt 20")
+	if len(restored.entries) != 19 {
+		t.Fatalf("entries = %d, want the cancelled prompt dropped from 20", len(restored.entries))
+	}
+	beforeEntryRows := strings.Join(strings.Split(before, "\n")[:6], "\n")
+	afterEntryRows := strings.Join(strings.Split(restored.screen(), "\n")[:6], "\n")
+	if afterEntryRows != beforeEntryRows {
+		t.Errorf("entry rows moved when the cancelled prompt was dropped:\nbefore\n%s\nafter\n%s", beforeEntryRows,
+			afterEntryRows)
 	}
 }
 

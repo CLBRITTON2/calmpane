@@ -70,6 +70,13 @@ var sendNowKeys = []string{"ctrl+x", "ctrl+s"}
 type claudeInput interface {
 	PromptAgent(paneID string, prompt string) error
 	SendKeys(paneID string, keys []string) error
+	StyledScreen(paneID string) (string, error)
+}
+
+// agentInputTakenMsg carries the prompt Claude put back in its input box when an Esc cancelled the turn before a reply.
+type agentInputTakenMsg struct {
+	text string
+	err  error
 }
 
 type earlyPrompt struct {
@@ -91,6 +98,8 @@ type zenModel struct {
 	// rowsBelowView counts the rows under the bottom of the view, 0 when it shows the newest entry.
 	rowsBelowView int
 	agentStatus   string
+	// interrupting is set by an Esc sent to a working Claude, until Claude stops working.
+	interrupting bool
 	turn          currentTurn
 	now           time.Time
 	clockTicking  bool
@@ -443,6 +452,13 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.agentStatus = msg.status
 		m.status = ""
 		m.copyStatus = ""
+		if msg.status != "working" && m.interrupting {
+			m.interrupting = false
+			return m, func() tea.Msg {
+				text, err := TakeAgentInput(m.claude, m.claudePaneID)
+				return agentInputTakenMsg{text: text, err: err}
+			}
+		}
 		if msg.status != "working" || m.clockTicking {
 			return m, nil
 		}
@@ -455,6 +471,13 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Every(time.Second, func(now time.Time) tea.Msg { return clockTickMsg{now: now} })
+	case agentInputTakenMsg:
+		if msg.err != nil {
+			m.status = errorStyle.Render(msg.err.Error())
+			m.copyStatus = ""
+			return m, nil
+		}
+		return m.withCancelledPromptRestored(msg.text), nil
 	case problemMsg:
 		m.status = errorStyle.Render(msg.err.Error())
 		m.copyStatus = ""
@@ -476,13 +499,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			return m, nil
 		}
-		// text typed since Enter stays, after the refused prompt
-		refusedText := msg.prompt
-		if typedSince := m.input.Value(); typedSince != "" {
-			refusedText += "\n" + typedSince
-		}
-		m.input.SetValue(refusedText)
-		return m.withEarlyPromptRemoved(strings.TrimSpace(msg.prompt)), nil
+		return m.withPromptPutBack(msg.prompt), nil
 	case tea.KeyPressMsg:
 		if m.fatal != nil {
 			return m, tea.Quit
@@ -552,6 +569,7 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		if m.agentStatus != "working" {
 			return m, nil
 		}
+		m.interrupting = true
 		return m, func() tea.Msg {
 			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, []string{"esc"})}
 		}
@@ -560,6 +578,35 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	m.input, inputCmd = m.input.Update(msg)
 	// the entries take the rows the input gives up
 	return m.withVisibleRowsDrawn(), inputCmd
+}
+
+func (m zenModel) withPromptPutBack(prompt string) zenModel {
+	restored := prompt
+	if typedSince := m.input.Value(); typedSince != "" {
+		restored += "\n" + typedSince
+	}
+	m.input.SetValue(restored)
+	return m.withEarlyPromptRemoved(strings.TrimSpace(prompt))
+}
+
+// Claude's own view drops a prompt an Esc cancelled before the reply.
+func (m zenModel) withCancelledPromptRestored(prompt string) zenModel {
+	if prompt == "" {
+		return m
+	}
+	m = m.withPromptPutBack(prompt)
+	newest := len(m.entries) - 1
+	newestIsCancelledPrompt := newest >= 0 && m.entries[newest].kind == promptEntry &&
+		strings.TrimSpace(m.entries[newest].text) == strings.TrimSpace(prompt)
+	if !newestIsCancelledPrompt {
+		return m.withVisibleRowsDrawn()
+	}
+	if m.rowsBelowView > 0 {
+		m.rowsBelowView = max(m.rowsBelowView-len(m.entryRows[newest]), 0)
+	}
+	m.entries = slices.Delete(slices.Clone(m.entries), newest, newest+1)
+	m.entryRows = slices.Delete(slices.Clone(m.entryRows), newest, newest+1)
+	return m.withVisibleRowsDrawn()
 }
 
 func (m zenModel) withInputSent(prompt string) zenModel {

@@ -42,43 +42,51 @@ func MoveAgentInputIntoDraft(herdr herdrCLI, claudePane herdrPane, draftFile str
 	if claudePane.AgentStatus == "blocked" {
 		return nil
 	}
-	screen, err := herdr.StyledScreen(claudePane.PaneID)
-	if err != nil {
+	agentInput, err := TakeAgentInput(herdr, claudePane.PaneID)
+	if err != nil || agentInput == "" {
 		return err
-	}
-	box := ClaudeInputBoxOnScreen(screen)
-	if box.Draft == "" {
-		return nil
-	}
-	// Claude Code 2.1.329: ctrl+u deletes back to the start of the cursor's row or the line break before it, so twice
-	// the rows empties the box. ctrl+c would interrupt a working turn, and ctrl+l only redraws.
-	if err := herdr.SendKeys(claudePane.PaneID, slices.Repeat([]string{"ctrl+u"}, 2*box.Rows)); err != nil {
-		return err
-	}
-	// Claude takes the keys after herdr returns
-	deadline := time.Now().Add(2 * time.Second)
-	for {
-		screen, err := herdr.StyledScreen(claudePane.PaneID)
-		if err != nil {
-			return err
-		}
-		if ClaudeInputBoxOnScreen(screen).Draft == "" {
-			break
-		}
-		if time.Now().After(deadline) {
-			return fmt.Errorf("Claude's input in pane %s still holds text after ctrl+u, so zen took none of it: ctrl+y "+
-				"in Claude pastes back what ctrl+u deleted", claudePane.PaneID)
-		}
-		time.Sleep(100 * time.Millisecond)
 	}
 	savedDraft, err := SavedDraft(draftFile)
 	if err != nil {
 		return err
 	}
 	if savedDraft == "" {
-		return WriteWhole(draftFile, box.Draft)
+		return WriteWhole(draftFile, agentInput)
 	}
-	return WriteWhole(draftFile, savedDraft+"\n"+box.Draft)
+	return WriteWhole(draftFile, savedDraft+"\n"+agentInput)
+}
+
+// TakeAgentInput empties the unsent text of the input box in Claude pane claudePaneID and returns that text.
+func TakeAgentInput(claude claudeInput, claudePaneID string) (string, error) {
+	screen, err := claude.StyledScreen(claudePaneID)
+	if err != nil {
+		return "", err
+	}
+	box := ClaudeInputBoxOnScreen(screen)
+	if box.Draft == "" {
+		return "", nil
+	}
+	// Claude Code 2.1.329: ctrl+u deletes back to the start of the cursor's row or the line break before it, so twice
+	// the rows empties the box. ctrl+c would interrupt a working turn, and ctrl+l only redraws.
+	if err := claude.SendKeys(claudePaneID, slices.Repeat([]string{"ctrl+u"}, 2*box.Rows)); err != nil {
+		return "", err
+	}
+	// Claude takes the keys after herdr returns
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		screen, err := claude.StyledScreen(claudePaneID)
+		if err != nil {
+			return "", err
+		}
+		if ClaudeInputBoxOnScreen(screen).Draft == "" {
+			return box.Draft, nil
+		}
+		if time.Now().After(deadline) {
+			return "", fmt.Errorf("Claude's input in pane %s still holds text after ctrl+u, so zen took none of it: ctrl+y "+
+				"in Claude pastes back what ctrl+u deleted", claudePaneID)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
 }
 
 // SavedDraft is empty when there is no draft file.

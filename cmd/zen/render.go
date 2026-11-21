@@ -38,7 +38,7 @@ var (
 
 const bandMarker = "▌ "
 
-const queuedNote = "queued"
+const queuedNote = "queued · ctrl+enter to send now"
 
 // replyStyle is glamour's dark style in the colors above, with no background on reply text, no # before headings and
 // no blank lines around the document.
