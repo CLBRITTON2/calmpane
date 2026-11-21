@@ -1,5 +1,5 @@
-// Command zen shows the dialogue of the Claude session in a herdr pane: the user's prompts, Claude's reply text and
-// its questions.
+// Command zen shows the dialogue of a Claude session, in a herdr pane or over the Claude `zen claude` starts: the
+// user's prompts, Claude's reply text and its questions.
 package main
 
 import (
@@ -9,11 +9,29 @@ import (
 	"strconv"
 
 	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
+	"github.com/CLBRITTON2/herdr-zen/internal/ptyagent"
 	"github.com/CLBRITTON2/herdr-zen/internal/ui"
 	"github.com/CLBRITTON2/herdr-zen/internal/zenmode"
 )
 
 func main() {
+	switch {
+	case len(os.Args) >= 2 && os.Args[1] == "claude":
+		exitCode, err := ptyagent.RunClaudeUnderZenView(os.Args[2:])
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+		}
+		if err != nil && exitCode == 0 {
+			os.Exit(1)
+		}
+		os.Exit(exitCode)
+	case len(os.Args) == 3 && os.Args[1] == "hook":
+		if err := ptyagent.WriteHookState(os.Args[2], os.Stdin); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	cli := herdr.CLI{Binary: os.Getenv("HERDR_BIN_PATH"), PluginID: os.Getenv("HERDR_PLUGIN_ID")}
 	if cli.Binary == "" || cli.PluginID == "" {
 		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH or HERDR_PLUGIN_ID is not set: zen runs from a herdr plugin")
@@ -45,7 +63,7 @@ func main() {
 			return zenmode.FocusAgentOrItsZenPane(cli, mode, agentNumber)
 		})
 	default:
-		err = errors.New("usage: zen [toggle|on|focus|focus-agent <number>]")
+		err = errors.New("usage: zen [toggle|on|focus|focus-agent <number>|claude [claude arguments...]|hook <state file>]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

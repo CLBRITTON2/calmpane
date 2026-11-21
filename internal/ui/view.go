@@ -153,36 +153,39 @@ func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, s
 		input: NewPromptInput()}
 	model.input.SetValue(draft)
 	program := tea.NewProgram(draftSavingView{zen: model, saveDraft: saveDraft, savedDraft: draft})
-	go func() {
-		sessionID, err := agent.WaitForSessionID()
-		if err != nil {
-			program.Send(fatalMsg{err: err})
-			return
-		}
-		localAppData, err := os.UserCacheDir()
-		if err != nil {
-			program.Send(fatalMsg{err: fmt.Errorf("find the local app data directory: %w", err)})
-			return
-		}
-		conversationSessionIDs := make(chan string)
-		// windows-dev's claude/statusline.ps1 writes a file named for each session there
-		statusLineDir := filepath.Join(localAppData, "windows-dev", "statusline")
-		go followClaudeStatusLine(statusLineDir, conversationSessionIDs, 300*time.Millisecond, program.Send)
-		transcript, err := claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
-		if err != nil {
-			program.Send(fatalMsg{err: err})
-			return
-		}
-		go pollAgentStatus(agent, program.Send)
-		err = followTranscript(transcript, program.Send)
-		program.Send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err),
-			transcript.Close())})
-	}()
+	go followAgentSession(agent, program.Send)
 	finalModel, runErr := program.Run()
 	if finalModel, isDraftSavingView := finalModel.(draftSavingView); isDraftSavingView {
 		return errors.Join(finalModel.zen.fatal, runErr)
 	}
 	return runErr
+}
+
+// followAgentSession sends the dialogue, status and status line of the session the agent reports, until a failure
+// it sends as fatal.
+func followAgentSession(agent Agent, send func(tea.Msg)) {
+	sessionID, err := agent.WaitForSessionID()
+	if err != nil {
+		send(fatalMsg{err: err})
+		return
+	}
+	localAppData, err := os.UserCacheDir()
+	if err != nil {
+		send(fatalMsg{err: fmt.Errorf("find the local app data directory: %w", err)})
+		return
+	}
+	conversationSessionIDs := make(chan string)
+	// windows-dev's claude/statusline.ps1 writes a file named for each session there
+	statusLineDir := filepath.Join(localAppData, "windows-dev", "statusline")
+	go followClaudeStatusLine(statusLineDir, conversationSessionIDs, 300*time.Millisecond, send)
+	transcript, err := claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
+	if err != nil {
+		send(fatalMsg{err: err})
+		return
+	}
+	go pollAgentStatus(agent, send)
+	err = followTranscript(transcript, send)
+	send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err), transcript.Close())})
 }
 
 // followTranscript sends the tail's entries in one message once it reaches the end of the file, then each new

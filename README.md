@@ -16,7 +16,16 @@ go install github.com/CLBRITTON2/herdr-zen/cmd/zen@latest
 
 From a clone, `make` installs it and `make test` vets and tests it.
 
-`zen.exe` runs as a herdr plugin. The plugin manifest and key bindings live in
+To run zen in any terminal without herdr, start Claude through it, with any arguments Claude takes:
+
+```
+zen claude
+zen claude --continue
+```
+
+alt+x switches between the zen view and Claude's own screen. zen exits with Claude's exit code when Claude exits.
+
+`zen.exe` also runs as a herdr plugin. The plugin manifest and key bindings live in
 [windows-dev](https://github.com/CLBRITTON2/windows-dev) (`herdr/zen`, `herdr/config.toml`).
 
 ## Keys
