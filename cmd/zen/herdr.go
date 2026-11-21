@@ -18,6 +18,7 @@ const zenPaneTitle = "Zen"
 
 type herdrPane struct {
 	PaneID       string            `json:"pane_id"`
+	TabID        string            `json:"tab_id"`
 	Agent        string            `json:"agent"`
 	Label        string            `json:"label"`
 	Focused      bool              `json:"focused"`
@@ -91,6 +92,23 @@ func (h herdrCLI) Panes() ([]herdrPane, error) {
 	return reply.Result.Panes, nil
 }
 
+// Agents is in herdr's agent list order, the order its focus_agent keys number the agents in.
+func (h herdrCLI) Agents() ([]herdrPane, error) {
+	output, err := h.run("agent list")
+	if err != nil {
+		return nil, err
+	}
+	var reply struct {
+		Result struct {
+			Agents []herdrPane `json:"agents"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output, &reply); err != nil {
+		return nil, fmt.Errorf("decode herdr agent list reply %q: %w", output, err)
+	}
+	return reply.Result.Agents, nil
+}
+
 func (h herdrCLI) PromptAgent(paneID string, prompt string) error {
 	_, err := h.run("agent prompt", paneID, prompt)
 	return err
@@ -129,6 +147,13 @@ func (h herdrCLI) FocusAndZoomZenPane(zenPaneID string) error {
 		return err
 	}
 	_, err := h.run("pane zoom", zenPaneID, "--on")
+	return err
+}
+
+// FocusTab is how an API call moves the attached client to another tab: after plugin pane focus alone, herdr 0.9.5's
+// client switches back to the tab it last showed on the next key press.
+func (h herdrCLI) FocusTab(tabID string) error {
+	_, err := h.run("tab focus", tabID)
 	return err
 }
 

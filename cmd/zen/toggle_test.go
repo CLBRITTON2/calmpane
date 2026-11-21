@@ -85,6 +85,19 @@ func RunFakeHerdr(fakeDir string, arguments []string) error {
 		}
 		_, err = os.Stdout.Write(reply)
 		return err
+	case "agent list":
+		agents := []herdrPane{}
+		for _, pane := range panes {
+			if pane.Agent != "" {
+				agents = append(agents, pane)
+			}
+		}
+		reply, err := json.Marshal(map[string]map[string][]herdrPane{"result": {"agents": agents}})
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(reply)
+		return err
 	case "plugin pane":
 		if arguments[2] != "open" {
 			return nil
@@ -232,6 +245,60 @@ func TestTheFocusHookShowsTheExistingZenPaneOfTheFocusedClaudePane(t *testing.T)
 		t.Fatal(err)
 	}
 	want := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func TestFocusAgentFocusesTheNumberedAgentWhileZenModeIsOff(t *testing.T) {
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true), claudePane("w2:p1", false)})
+	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"agent list", "agent focus w2:p1"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func TestFocusAgentShowsTheZenPaneOfTheNumberedAgentWithoutFocusingTheAgent(t *testing.T) {
+	agentZenPane := zenPane("w1:p4", "w1:p3", false)
+	agentZenPane.TabID = "w1:t2"
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", false), zenPane("w1:p2", "w1:p1", true),
+		claudePane("w1:p3", false), agentZenPane})
+	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"agent list", "pane list", "tab focus w1:t2", "plugin pane focus w1:p4", "pane zoom w1:p4 --on"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func TestFocusAgentFocusesTheNumberedAgentWithoutAZenPaneForTheFocusHookToOpenOne(t *testing.T) {
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", false), zenPane("w1:p2", "w1:p1", true),
+		claudePane("w2:p1", false)})
+	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"agent list", "pane list", "agent focus w2:p1"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func TestFocusAgentFailsForANumberPastTheLastAgent(t *testing.T) {
+	herdr, mode, calls := fakeHerdr(t, []herdrPane{claudePane("w1:p1", true)})
+	if err := FocusAgentOrItsZenPane(herdr, mode, 2); err == nil {
+		t.Fatal("FocusAgentOrItsZenPane(2) with one agent returned no error")
+	}
+	want := []string{"agent list"}
 	if got := calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
 	}

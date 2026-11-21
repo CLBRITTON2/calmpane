@@ -92,6 +92,42 @@ func ShowFocusedZenView(herdr herdrCLI, mode zenMode) error {
 	})
 }
 
+// FocusAgentOrItsZenPane is the alt+1..9 action, focusing the agentNumber-th agent of herdr's agent list. While zen
+// mode is on it focuses the agent's zen pane straight away: focusing the agent first would show its pane until the
+// focus hook switches to the zen pane.
+func FocusAgentOrItsZenPane(herdr herdrCLI, mode zenMode, agentNumber int) error {
+	return mode.WhileLocked(func() error {
+		agents, err := herdr.Agents()
+		if err != nil {
+			return err
+		}
+		if agentNumber < 1 || agentNumber > len(agents) {
+			return fmt.Errorf("agent %d does not exist: herdr agent list has %d agents", agentNumber, len(agents))
+		}
+		agentPaneID := agents[agentNumber-1].PaneID
+		isOn, err := mode.IsOn()
+		if err != nil {
+			return err
+		}
+		if !isOn {
+			return herdr.FocusAgent(agentPaneID)
+		}
+		panes, err := herdr.Panes()
+		if err != nil {
+			return err
+		}
+		for _, pane := range panes {
+			if pane.Tokens[claudePaneToken] == agentPaneID {
+				if err := herdr.FocusTab(pane.TabID); err != nil {
+					return err
+				}
+				return herdr.FocusAndZoomZenPane(pane.PaneID)
+			}
+		}
+		return herdr.FocusAgent(agentPaneID)
+	})
+}
+
 func OpenOrShowZenPaneOfFocusedPane(herdr herdrCLI, mode zenMode, panes []herdrPane) error {
 	action, err := ZenPaneActionForFocusedPane(panes)
 	if err != nil {

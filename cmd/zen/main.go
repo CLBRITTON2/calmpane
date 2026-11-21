@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 )
 
 const (
@@ -28,8 +29,17 @@ func main() {
 		err = withZenMode(herdr, ToggleZenMode)
 	case len(os.Args) == 2 && os.Args[1] == "focus":
 		err = withZenMode(herdr, ShowFocusedZenView)
+	case len(os.Args) == 3 && os.Args[1] == "focus-agent":
+		agentNumber, parseErr := strconv.Atoi(os.Args[2])
+		if parseErr != nil {
+			err = fmt.Errorf("focus-agent takes an agent number: %w", parseErr)
+			break
+		}
+		err = withZenMode(herdr, func(herdr herdrCLI, mode zenMode) error {
+			return FocusAgentOrItsZenPane(herdr, mode, agentNumber)
+		})
 	default:
-		err = errors.New("usage: zen [toggle|focus]")
+		err = errors.New("usage: zen [toggle|focus|focus-agent <number>]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
