@@ -19,8 +19,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/zenmode"
 )
 
 // toggleKey is the key windows-dev's herdr/config.toml binds to the windows-dev.zen.toggle action.
@@ -41,7 +39,7 @@ type entriesReadMsg struct {
 }
 
 type agentStatusMsg struct {
-	status string
+	status AgentStatus
 }
 
 type clockTickMsg struct {
@@ -72,9 +70,6 @@ type claudeKeysSentMsg struct {
 	err error
 }
 
-// Claude Code's default chat:sendNow keys. Not Ctrl+Enter, which a terminal without extended keys sends as Enter.
-var sendNowKeys = []string{"ctrl+x", "ctrl+s"}
-
 // agentInputTakenMsg carries the prompt Claude put back in its input box when an Esc cancelled the turn before a reply.
 type agentInputTakenMsg struct {
 	text string
@@ -88,8 +83,7 @@ type earlyPrompt struct {
 }
 
 type zenModel struct {
-	claude       zenmode.ClaudeInput
-	claudePaneID string
+	agent Agent
 	// fatal is shown alone until a key ends the view, since herdr closes the pane as soon as zen exits.
 	fatal   error
 	entries []claudecode.DialogueEntry
@@ -100,7 +94,7 @@ type zenModel struct {
 	height        int
 	// rowsBelowView counts the rows under the bottom of the view, 0 when it shows the newest entry.
 	rowsBelowView int
-	agentStatus   string
+	agentStatus   AgentStatus
 	// interrupting is set by an Esc sent to a working Claude, until Claude stops working.
 	interrupting bool
 	turn         claudecode.CurrentTurn
@@ -146,22 +140,24 @@ func NewPromptInput() textarea.Model {
 	return input
 }
 
-func RunZenView(cli herdr.CLI) error {
-	claudePaneID := os.Getenv(herdr.ClaudePaneEnv)
-	model := zenModel{claude: cli, claudePaneID: claudePaneID, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
+// RunZenView shows startErr alone until a key ends the view, when it is not nil.
+func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, startErr error) error {
+	model := zenModel{agent: agent, fatal: startErr, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
-	mode, modeErr := zenmode.ModeOfPlugin(cli.PluginID)
-	draft, draftErr := zenmode.SavedDraft(mode.DraftFile(claudePaneID))
-	model.fatal = errors.Join(modeErr, draftErr)
 	model.input.SetValue(draft)
-	program := tea.NewProgram(draftSavingView{zen: model, draftFile: mode.DraftFile(claudePaneID), savedDraft: draft})
+	program := tea.NewProgram(draftSavingView{zen: model, saveDraft: saveDraft, savedDraft: draft})
 	go func() {
-		transcript, statusLinePath, err := claudecode.WaitForTranscriptAndStatusLinePath(cli, claudePaneID)
+		sessionID, err := agent.WaitForSessionID()
 		if err != nil {
 			program.Send(fatalMsg{err: err})
 			return
 		}
-		go pollAgentStatus(cli, claudePaneID, program.Send)
+		transcript, statusLinePath, err := claudecode.WaitForTranscriptAndStatusLinePath(sessionID)
+		if err != nil {
+			program.Send(fatalMsg{err: err})
+			return
+		}
+		go pollAgentStatus(agent, program.Send)
 		go followClaudeStatusLine(statusLinePath, 300*time.Millisecond, program.Send)
 		err = followTranscript(transcript, program.Send)
 		program.Send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err),
@@ -261,25 +257,25 @@ func LineNumberAt(file io.ReaderAt, offset int64) (int, error) {
 }
 
 // pollAgentStatus keeps polling after a failure, since the view keeps running.
-func pollAgentStatus(cli herdr.CLI, claudePaneID string, send func(tea.Msg)) {
-	lastStatus := ""
+func pollAgentStatus(agent Agent, send func(tea.Msg)) {
+	lastStatus := AgentUnknown
 	for {
-		pane, err := cli.Pane(claudePaneID)
+		agentStatus, err := agent.Status()
 		if err != nil {
 			send(problemMsg{err: err})
-		} else if pane.AgentStatus != lastStatus {
-			lastStatus = pane.AgentStatus
-			send(agentStatusMsg{status: pane.AgentStatus})
+		} else if agentStatus != lastStatus {
+			lastStatus = agentStatus
+			send(agentStatusMsg{status: agentStatus})
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 }
 
-func statusLine(agentStatus string, turn claudecode.CurrentTurn, now time.Time, width int) string {
+func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.Time, width int) string {
 	switch agentStatus {
-	case "blocked":
+	case AgentBlocked:
 		return waitingStyle.Render("Waiting for you in Claude. Press " + toggleKey + " to answer.")
-	case "working":
+	case AgentWorking:
 		activity := turn.ToolCallActivity
 		if activity == "" {
 			activity = "Working..."
@@ -322,35 +318,35 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentStatusMsg:
-		turnEnded := m.agentStatus == "working" && (msg.status == "idle" || msg.status == "done")
+		turnEnded := m.agentStatus == AgentWorking && (msg.status == AgentIdle || msg.status == AgentDone)
 		m.agentStatus = msg.status
 		m.status = ""
 		m.copyStatus = ""
 		m.endedTurnRow = ""
-		if msg.status != "working" && m.interrupting {
+		if msg.status != AgentWorking && m.interrupting {
 			m.interrupting = false
 			return m, func() tea.Msg {
-				text, err := zenmode.TakeAgentInput(m.claude, m.claudePaneID)
+				text, err := m.agent.TakeInput()
 				return agentInputTakenMsg{text: text, err: err}
 			}
 		}
 		if turnEnded {
 			return m, func() tea.Msg { return turnEndedMsg{now: time.Now()} }
 		}
-		if msg.status != "working" || m.clockTicking {
+		if msg.status != AgentWorking || m.clockTicking {
 			return m, nil
 		}
 		m.clockTicking = true
 		return m, func() tea.Msg { return clockTickMsg{now: time.Now()} }
 	case clockTickMsg:
 		m.now = msg.now
-		if m.agentStatus != "working" {
+		if m.agentStatus != AgentWorking {
 			m.clockTicking = false
 			return m, nil
 		}
 		return m, tea.Every(time.Second, func(now time.Time) tea.Msg { return clockTickMsg{now: now} })
 	case turnEndedMsg:
-		if m.agentStatus == "working" || m.agentStatus == "blocked" {
+		if m.agentStatus == AgentWorking || m.agentStatus == AgentBlocked {
 			return m, nil
 		}
 		m.endedTurnRow = "Done"
@@ -378,7 +374,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case promptSentMsg:
 		m.copyStatus = ""
 		switch {
-		case errors.Is(msg.err, herdr.ErrAgentBlocked):
+		case errors.Is(msg.err, ErrAgentBlocked):
 			m.status = errorStyle.Render("Claude is waiting for you. Press " + toggleKey + " to answer.")
 		case msg.err != nil:
 			m.status = errorStyle.Render(msg.err.Error())
@@ -436,7 +432,7 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		}
 		pastes := m.pastes
 		sendPrompt := func() tea.Msg {
-			return promptSentMsg{prompt: prompt, pastes: pastes, err: m.claude.PromptAgent(m.claudePaneID, prompt)}
+			return promptSentMsg{prompt: prompt, pastes: pastes, err: m.agent.SendPrompt(prompt)}
 		}
 		return m.withInputSent(prompt), sendPrompt
 	case "ctrl+enter":
@@ -444,25 +440,24 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		pastes := m.pastes
 		if prompt == "" {
 			return m, func() tea.Msg {
-				return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+				return claudeKeysSentMsg{err: m.agent.SendNow()}
 			}
 		}
-		// herdr returns from agent prompt once it has written the prompt and its Enter, so the keys reach Claude after them.
 		sendPromptAndSendNow := func() tea.Msg {
-			if err := m.claude.PromptAgent(m.claudePaneID, prompt); err != nil {
+			if err := m.agent.SendPrompt(prompt); err != nil {
 				return promptSentMsg{prompt: prompt, pastes: pastes, err: err}
 			}
-			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
+			return claudeKeysSentMsg{err: m.agent.SendNow()}
 		}
 		return m.withInputSent(prompt), sendPromptAndSendNow
 	case "esc":
 		// Claude takes Esc twice in a row while idle as the rewind menu, which would wait unseen behind the zen view
-		if m.agentStatus != "working" {
+		if m.agentStatus != AgentWorking {
 			return m, nil
 		}
 		m.interrupting = true
 		return m, func() tea.Msg {
-			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, []string{"esc"})}
+			return claudeKeysSentMsg{err: m.agent.Interrupt()}
 		}
 	}
 	var inputCmd tea.Cmd
@@ -802,11 +797,11 @@ func (m zenModel) screen() string {
 	return strings.Join(rows, "\n")
 }
 
-// draftSavingView saves the zen input's unsent text to draftFile after each update, so turning zen mode off can move
+// draftSavingView saves the zen input's unsent text with saveDraft after each update, so turning zen mode off can move
 // it into Claude's input after closing the zen pane.
 type draftSavingView struct {
 	zen        zenModel
-	draftFile  string
+	saveDraft  func(draft string) error
 	savedDraft string
 }
 
@@ -825,7 +820,7 @@ func (v draftSavingView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	if draft == v.savedDraft {
 		return v, cmd
 	}
-	if err := zenmode.WriteWhole(v.draftFile, draft); err != nil {
+	if err := v.saveDraft(draft); err != nil {
 		v.zen.status = errorStyle.Render(err.Error())
 		return v, cmd
 	}

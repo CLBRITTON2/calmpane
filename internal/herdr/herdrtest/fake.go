@@ -65,6 +65,13 @@ func runFakeHerdr(fakeDir string, arguments []string) error {
 			return err
 		}
 		return nil
+	case "agent prompt":
+		for _, pane := range panes {
+			if pane.PaneID == arguments[2] && pane.AgentStatus == "blocked" {
+				return errors.New(`{"error":{"code":"agent_blocked"}}`)
+			}
+		}
+		return nil
 	case "pane get":
 		for _, pane := range panes {
 			if pane.PaneID == arguments[2] {

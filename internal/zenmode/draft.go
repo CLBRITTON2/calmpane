@@ -58,8 +58,8 @@ func MoveAgentInputIntoDraft(cli herdr.CLI, claudePane herdr.Pane, draftFile str
 }
 
 // TakeAgentInput empties the unsent text of the input box in Claude pane claudePaneID and returns that text.
-func TakeAgentInput(claude ClaudeInput, claudePaneID string) (string, error) {
-	screen, err := claude.StyledScreen(claudePaneID)
+func TakeAgentInput(cli herdr.CLI, claudePaneID string) (string, error) {
+	screen, err := cli.StyledScreen(claudePaneID)
 	if err != nil {
 		return "", err
 	}
@@ -69,13 +69,13 @@ func TakeAgentInput(claude ClaudeInput, claudePaneID string) (string, error) {
 	}
 	// Claude Code 2.1.329: ctrl+u deletes back to the start of the cursor's row or the line break before it, so twice
 	// the rows empties the box. ctrl+c would interrupt a working turn, and ctrl+l only redraws.
-	if err := claude.SendKeys(claudePaneID, slices.Repeat([]string{"ctrl+u"}, 2*box.Rows)); err != nil {
+	if err := cli.SendKeys(claudePaneID, slices.Repeat([]string{"ctrl+u"}, 2*box.Rows)); err != nil {
 		return "", err
 	}
 	// Claude takes the keys after herdr returns
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		screen, err := claude.StyledScreen(claudePaneID)
+		screen, err := cli.StyledScreen(claudePaneID)
 		if err != nil {
 			return "", err
 		}
@@ -109,10 +109,4 @@ func WriteWhole(file string, text string) error {
 		return err
 	}
 	return os.Rename(staging, file)
-}
-
-type ClaudeInput interface {
-	PromptAgent(paneID string, prompt string) error
-	SendKeys(paneID string, keys []string) error
-	StyledScreen(paneID string) (string, error)
 }

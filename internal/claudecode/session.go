@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
 )
 
 // backgroundJobLine is the output Claude Code's /resume writes into the session of the Claude that opens a background
@@ -105,35 +103,20 @@ func openTranscript(sessionID string) (*os.File, error) {
 	return transcript, nil
 }
 
-// WaitForTranscriptAndStatusLinePath waits for a Claude that just started: herdr reports its session once it is
-// past its startup prompts, and Claude writes the transcript at the first prompt.
-func WaitForTranscriptAndStatusLinePath(cli herdr.CLI, claudePaneID string) (*os.File, string, error) {
+// WaitForTranscriptAndStatusLinePath waits for a Claude that just started, which writes the transcript of
+// reportedSessionID at the first prompt.
+func WaitForTranscriptAndStatusLinePath(reportedSessionID string) (*os.File, string, error) {
 	for {
-		transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(cli, claudePaneID)
-		if !errors.Is(err, errClaudeSessionNotReported) && !errors.Is(err, fs.ErrNotExist) {
+		transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(reportedSessionID)
+		if !errors.Is(err, fs.ErrNotExist) {
 			return transcript, statusLinePath, err
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
 }
 
-var errClaudeSessionNotReported = errors.New("herdr reports no session yet for the Claude in this pane")
-
-func openClaudeTranscriptAndStatusLinePath(cli herdr.CLI, claudePaneID string) (*os.File, string, error) {
-	if claudePaneID == "" {
-		return nil, "", fmt.Errorf("%s is not set: the toggle action opens the zen pane", herdr.ClaudePaneEnv)
-	}
-	claudePane, err := cli.Pane(claudePaneID)
-	if err != nil {
-		return nil, "", err
-	}
-	if claudePane.AgentSession == nil && claudePane.Agent == "claude" {
-		return nil, "", errClaudeSessionNotReported
-	}
-	if claudePane.AgentSession == nil || claudePane.AgentSession.Agent != "claude" {
-		return nil, "", errors.New("No Claude session in this pane.")
-	}
-	sessionID, err := ConversationSessionID(claudePane.AgentSession.Value)
+func openClaudeTranscriptAndStatusLinePath(reportedSessionID string) (*os.File, string, error) {
+	sessionID, err := ConversationSessionID(reportedSessionID)
 	if err != nil {
 		return nil, "", err
 	}

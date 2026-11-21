@@ -22,7 +22,13 @@ func main() {
 	var err error
 	switch {
 	case len(os.Args) == 1:
-		err = ui.RunZenView(cli)
+		claudePaneID := os.Getenv(herdr.ClaudePaneEnv)
+		mode, modeErr := zenmode.ModeOfPlugin(cli.PluginID)
+		draftFile := mode.DraftFile(claudePaneID)
+		draft, draftErr := zenmode.SavedDraft(draftFile)
+		saveDraft := func(draft string) error { return zenmode.WriteWhole(draftFile, draft) }
+		err = ui.RunZenView(zenmode.HerdrAgent{CLI: cli, ClaudePaneID: claudePaneID}, draft, saveDraft,
+			errors.Join(modeErr, draftErr))
 	case len(os.Args) == 2 && os.Args[1] == "toggle":
 		err = withZenMode(cli, zenmode.Toggle)
 	case len(os.Args) == 2 && os.Args[1] == "on":

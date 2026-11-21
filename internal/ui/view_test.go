@@ -14,8 +14,6 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr/herdrtest"
 )
 
 func TestLineNumberAt(t *testing.T) {
@@ -112,11 +110,11 @@ func enterClearsInputAtOnceAndFailedSendPutsWholeTextBack(t *testing.T) {
 		wantInput  string
 		wantShown  string
 	}{
-		{name: "refused while blocked", err: herdr.ErrAgentBlocked, wantInput: "keep me\nand this line",
+		{name: "refused while blocked", err: ErrAgentBlocked, wantInput: "keep me\nand this line",
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
 		{name: "herdr failed", err: errors.New("herdr agent prompt failed: exit status 1"),
 			wantInput: "keep me\nand this line", wantShown: "herdr agent prompt failed: exit status 1"},
-		{name: "refused after more typing", err: herdr.ErrAgentBlocked, typedSince: "more",
+		{name: "refused after more typing", err: ErrAgentBlocked, typedSince: "more",
 			wantInput: "keep me\nand this line\nmore", wantShown: "Claude is waiting for you. Press alt+x to answer."},
 		{name: "sent", err: nil, wantInput: "", wantShown: ""},
 		{name: "sent after more typing", err: nil, typedSince: "more", wantInput: "more", wantShown: ""},
@@ -274,10 +272,10 @@ func newStatusReplacesCopyStatus(t *testing.T) {
 		statusMsg tea.Msg
 		wantShown string
 	}{
-		{name: "agent status", statusMsg: agentStatusMsg{status: "working"}, wantShown: "Working..."},
+		{name: "agent status", statusMsg: agentStatusMsg{status: AgentWorking}, wantShown: "Working..."},
 		{name: "problem", statusMsg: problemMsg{err: errors.New("herdr pane get failed")},
 			wantShown: "herdr pane get failed"},
-		{name: "prompt refused", statusMsg: promptSentMsg{err: herdr.ErrAgentBlocked},
+		{name: "prompt refused", statusMsg: promptSentMsg{err: ErrAgentBlocked},
 			wantShown: "Claude is waiting for you. Press alt+x to answer."},
 		{name: "send-now keys refused", statusMsg: claudeKeysSentMsg{err: errors.New("herdr pane send-keys failed")},
 			wantShown: "herdr pane send-keys failed"},
@@ -363,7 +361,7 @@ func enterGivesSlashCommandNoEarlyBand(t *testing.T) {
 
 func failedSendRemovesEarlyBandAndShowsRefusal(t *testing.T) {
 	sent, _ := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
-	refused, _ := sent.(zenModel).Update(promptSentMsg{prompt: "rename the widget", err: herdr.ErrAgentBlocked})
+	refused, _ := sent.(zenModel).Update(promptSentMsg{prompt: "rename the widget", err: ErrAgentBlocked})
 	refusedModel := refused.(zenModel)
 	screenText := ansi.Strip(refusedModel.screen())
 	if strings.Contains(screenText, "▌ rename the widget") {
@@ -463,7 +461,7 @@ func inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight(t *testing.T) {
 }
 
 func shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines(t *testing.T) {
-	model := zenModel{claude: &claudeInputRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
+	model := zenModel{agent: &agentRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	model = model.withSize(60, 24)
 	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
@@ -507,7 +505,7 @@ func modelWithInputThenEntries(inputValue string) zenModel {
 }
 
 func entriesFillRowsInputGivesBack(t *testing.T) {
-	model := zenModel{claude: &claudeInputRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
+	model := zenModel{agent: &agentRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
 		input: NewPromptInput()}
 	model = model.withSize(60, 24)
 	// Entries that arrive under a tall input are drawn only down to its top row. A slash command gets no early band
@@ -527,33 +525,39 @@ func entriesFillRowsInputGivesBack(t *testing.T) {
 	}
 }
 
-// claudeInputRecorder records each send as "prompt <pane> <text>" or "keys <pane> <keys>".
-type claudeInputRecorder struct {
-	calls     []string
-	promptErr error
-	// screens are the pane reads StyledScreen returns in turn, the last one again once they run out.
-	screens []string
+// agentRecorder records each call as "prompt <text>", "send now", "interrupt" or "take input".
+type agentRecorder struct {
+	calls      []string
+	promptErr  error
+	typedInput string
 }
 
-func (r *claudeInputRecorder) StyledScreen(paneID string) (string, error) {
-	if len(r.screens) == 0 {
-		return "", nil
-	}
-	screen := r.screens[0]
-	if len(r.screens) > 1 {
-		r.screens = r.screens[1:]
-	}
-	return screen, nil
-}
-
-func (r *claudeInputRecorder) PromptAgent(paneID string, prompt string) error {
-	r.calls = append(r.calls, "prompt "+paneID+" "+prompt)
+func (r *agentRecorder) SendPrompt(prompt string) error {
+	r.calls = append(r.calls, "prompt "+prompt)
 	return r.promptErr
 }
 
-func (r *claudeInputRecorder) SendKeys(paneID string, keys []string) error {
-	r.calls = append(r.calls, "keys "+paneID+" "+strings.Join(keys, " "))
+func (r *agentRecorder) SendNow() error {
+	r.calls = append(r.calls, "send now")
 	return nil
+}
+
+func (r *agentRecorder) Interrupt() error {
+	r.calls = append(r.calls, "interrupt")
+	return nil
+}
+
+func (r *agentRecorder) TakeInput() (string, error) {
+	r.calls = append(r.calls, "take input")
+	return r.typedInput, nil
+}
+
+func (r *agentRecorder) Status() (AgentStatus, error) {
+	return AgentUnknown, nil
+}
+
+func (r *agentRecorder) WaitForSessionID() (string, error) {
+	return "", nil
 }
 
 func modelWithSentPrompts(prompts []string) zenModel {
@@ -686,16 +690,16 @@ func ctrlEnterSendsPromptThenSendNowKeys(t *testing.T) {
 		wantMsg   tea.Msg
 	}{
 		{name: "typed prompt", typed: "ship it",
-			wantCalls: []string{"prompt 3 ship it", "keys 3 ctrl+x ctrl+s"}, wantMsg: claudeKeysSentMsg{}},
-		{name: "empty input", typed: "", wantCalls: []string{"keys 3 ctrl+x ctrl+s"}, wantMsg: claudeKeysSentMsg{}},
-		{name: "refused prompt sends no keys", typed: "ship it", promptErr: herdr.ErrAgentBlocked,
-			wantCalls: []string{"prompt 3 ship it"}, wantMsg: promptSentMsg{prompt: "ship it", err: herdr.ErrAgentBlocked}},
+			wantCalls: []string{"prompt ship it", "send now"}, wantMsg: claudeKeysSentMsg{}},
+		{name: "empty input", typed: "", wantCalls: []string{"send now"}, wantMsg: claudeKeysSentMsg{}},
+		{name: "refused prompt sends no keys", typed: "ship it", promptErr: ErrAgentBlocked,
+			wantCalls: []string{"prompt ship it"}, wantMsg: promptSentMsg{prompt: "ship it", err: ErrAgentBlocked}},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			recorder := &claudeInputRecorder{promptErr: testCase.promptErr}
+			recorder := &agentRecorder{promptErr: testCase.promptErr}
 			model := modelWithTypedPrompt(testCase.typed)
-			model.claude, model.claudePaneID = recorder, "3"
+			model.agent = recorder
 			pressed, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
 			if send == nil {
 				t.Fatal("ctrl+enter returned no command")
@@ -722,18 +726,19 @@ func TestEsc(t *testing.T) {
 
 func escSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
 	cases := []struct {
-		agentStatus string
+		name        string
+		agentStatus AgentStatus
 		wantCalls   []string
 	}{
-		{agentStatus: "working", wantCalls: []string{"keys 3 esc"}},
-		{agentStatus: "idle", wantCalls: nil},
-		{agentStatus: "blocked", wantCalls: nil},
+		{name: "working", agentStatus: AgentWorking, wantCalls: []string{"interrupt"}},
+		{name: "idle", agentStatus: AgentIdle, wantCalls: nil},
+		{name: "blocked", agentStatus: AgentBlocked, wantCalls: nil},
 	}
 	for _, testCase := range cases {
-		t.Run(testCase.agentStatus, func(t *testing.T) {
-			recorder := &claudeInputRecorder{}
+		t.Run(testCase.name, func(t *testing.T) {
+			recorder := &agentRecorder{}
 			model := modelWithTypedPrompt("half typed")
-			model.claude, model.claudePaneID, model.agentStatus = recorder, "3", testCase.agentStatus
+			model.agent, model.agentStatus = recorder, testCase.agentStatus
 			pressed, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 			if send != nil {
 				if msg := send(); !reflect.DeepEqual(msg, claudeKeysSentMsg{}) {
@@ -751,15 +756,13 @@ func escSendsEscToClaudeOnlyWhileItWorks(t *testing.T) {
 }
 
 func escBeforeReplyMovesPromptClaudePutBackIntoZenInput(t *testing.T) {
-	recorder := &claudeInputRecorder{screens: []string{
-		herdrtest.CapturedScreen(t, "claude-input-one-row.ansi"), herdrtest.CapturedScreen(t, "claude-input-empty.ansi"),
-	}}
+	recorder := &agentRecorder{typedInput: "move this draft"}
 	model := modelWithTypedPrompt("typed since")
 	model = model.withEntries([]claudecode.DialogueEntry{{Kind: claudecode.PromptEntry, Text: "move this draft"}}, nil)
-	model.claude, model.claudePaneID, model.agentStatus = recorder, "3", "working"
+	model.agent, model.agentStatus = recorder, AgentWorking
 	pressed, sendEsc := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
 	sendEsc()
-	stopped, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: "done"})
+	stopped, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: AgentDone})
 	if takeInput == nil {
 		t.Fatal("Claude stopping after Esc returned no command to take its input")
 	}
@@ -767,7 +770,7 @@ func escBeforeReplyMovesPromptClaudePutBackIntoZenInput(t *testing.T) {
 	if !reflect.DeepEqual(taken, agentInputTakenMsg{text: "move this draft"}) {
 		t.Fatalf("take input returned %#v, want the prompt Claude put back", taken)
 	}
-	if want := []string{"keys 3 esc", "keys 3 ctrl+u ctrl+u"}; !reflect.DeepEqual(recorder.calls, want) {
+	if want := []string{"interrupt", "take input"}; !reflect.DeepEqual(recorder.calls, want) {
 		t.Errorf("sent %q, want %q", recorder.calls, want)
 	}
 	restored, _ := stopped.(zenModel).Update(taken)
@@ -777,7 +780,7 @@ func escBeforeReplyMovesPromptClaudePutBackIntoZenInput(t *testing.T) {
 	if screenText := ansi.Strip(restored.(zenModel).screen()); strings.Contains(screenText, "▌ move this draft") {
 		t.Errorf("the cancelled prompt's band still shows:\n%s", screenText)
 	}
-	if _, again := restored.(zenModel).Update(agentStatusMsg{status: "idle"}); again != nil {
+	if _, again := restored.(zenModel).Update(agentStatusMsg{status: AgentIdle}); again != nil {
 		t.Error("a later status change took Claude's input again")
 	}
 }
@@ -947,7 +950,7 @@ func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 					t.Fatalf("TurnAfterLine(%s): %v", line, err)
 				}
 			}
-			if row := ansi.Strip(statusLine("working", turn, now, 80)); row != testCase.wantRow {
+			if row := ansi.Strip(statusLine(AgentWorking, turn, now, 80)); row != testCase.wantRow {
 				t.Errorf("working row = %q, want %q", row, testCase.wantRow)
 			}
 		})
@@ -957,7 +960,7 @@ func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 func workingRowCutsToolCallAtViewWidthAndKeepsTime(t *testing.T) {
 	promptTime := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	turn := claudecode.CurrentTurn{PromptTime: promptTime, ToolCallActivity: "Running a very long command description"}
-	if row := ansi.Strip(statusLine("working", turn, promptTime.Add(42*time.Second), 20)); row != "Running a ver · 42s" {
+	if row := ansi.Strip(statusLine(AgentWorking, turn, promptTime.Add(42*time.Second), 20)); row != "Running a ver · 42s" {
 		t.Errorf("working row at width 20 = %q, want the tool call cut to fit the time in the 19 columns after the "+
 			"margin", row)
 	}
@@ -985,10 +988,10 @@ func turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne
 func blockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
 	turn := claudecode.CurrentTurn{PromptTime: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), ToolCallActivity: "Reading go.mod"}
 	now := turn.PromptTime.Add(42 * time.Second)
-	if row := ansi.Strip(statusLine("blocked", turn, now, 80)); row != "Waiting for you in Claude. Press alt+x to answer." {
+	if row := ansi.Strip(statusLine(AgentBlocked, turn, now, 80)); row != "Waiting for you in Claude. Press alt+x to answer." {
 		t.Errorf("blocked row = %q", row)
 	}
-	if row := statusLine("idle", turn, now, 80); row != "" {
+	if row := statusLine(AgentIdle, turn, now, 80); row != "" {
 		t.Errorf("idle row = %q, want it empty", row)
 	}
 }
@@ -998,7 +1001,7 @@ func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-42 * time.Second)
 	read, _ := model.Update(entriesReadMsg{turn: claudecode.CurrentTurn{PromptTime: promptTime, ToolCallActivity: "Reading go.mod"}})
-	started, firstTick := read.(zenModel).Update(agentStatusMsg{status: "working"})
+	started, firstTick := read.(zenModel).Update(agentStatusMsg{status: AgentWorking})
 	if firstTick == nil {
 		t.Fatal("working status returned no clock tick")
 	}
@@ -1006,7 +1009,7 @@ func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
 	if !isTick {
 		t.Fatalf("working status's command returned %#v, want a clock tick", firstTick())
 	}
-	if _, secondStart := started.(zenModel).Update(agentStatusMsg{status: "working"}); secondStart != nil {
+	if _, secondStart := started.(zenModel).Update(agentStatusMsg{status: AgentWorking}); secondStart != nil {
 		t.Errorf("a second working status started another clock")
 	}
 	ticked, nextTick := started.(zenModel).Update(tick)
@@ -1020,7 +1023,7 @@ func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
 	if screen := ansi.Strip(later.(zenModel).screen()); !strings.Contains(screen, " Reading go.mod · 45s") {
 		t.Errorf("screen three seconds later lacks the grown time:\n%s", screen)
 	}
-	idle, _ := later.(zenModel).Update(agentStatusMsg{status: "idle"})
+	idle, _ := later.(zenModel).Update(agentStatusMsg{status: AgentIdle})
 	if screen := ansi.Strip(idle.(zenModel).screen()); strings.Contains(screen, "Reading go.mod") {
 		t.Errorf("screen after the turn ended still shows the working row:\n%s", screen)
 	}
@@ -1035,15 +1038,15 @@ func doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) 
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-time.Hour)
 	read, _ := model.Update(entriesReadMsg{turn: claudecode.CurrentTurn{PromptTime: promptTime}})
-	working, _ := read.(zenModel).Update(agentStatusMsg{status: "working"})
-	stopped, endTurn := working.(zenModel).Update(agentStatusMsg{status: "done"})
+	working, _ := read.(zenModel).Update(agentStatusMsg{status: AgentWorking})
+	stopped, endTurn := working.(zenModel).Update(agentStatusMsg{status: AgentDone})
 	if endTurn == nil {
 		t.Fatal("Claude stopping work returned no command to end the turn")
 	}
 	if _, isTurnEnd := endTurn().(turnEndedMsg); !isTurnEnd {
 		t.Fatalf("Claude stopping work's command returned %#v, want a turn end", endTurn())
 	}
-	restarted, _ := stopped.(zenModel).Update(agentStatusMsg{status: "working"})
+	restarted, _ := stopped.(zenModel).Update(agentStatusMsg{status: AgentWorking})
 	late, _ := restarted.(zenModel).Update(turnEndedMsg{now: promptTime.Add(time.Minute)})
 	if screen := ansi.Strip(late.(zenModel).screen()); strings.Contains(screen, "Done") {
 		t.Errorf("a turn end arriving after Claude worked again showed the done row:\n%s", screen)
@@ -1052,25 +1055,25 @@ func doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) 
 	if screen := ansi.Strip(ended.(zenModel).screen()); !strings.Contains(screen, " Done · 1m 11s") {
 		t.Errorf("screen after the turn ended lacks the done row:\n%s", screen)
 	}
-	again, _ := ended.(zenModel).Update(agentStatusMsg{status: "working"})
+	again, _ := ended.(zenModel).Update(agentStatusMsg{status: AgentWorking})
 	if screen := ansi.Strip(again.(zenModel).screen()); strings.Contains(screen, "Done") {
 		t.Errorf("screen with Claude working again still shows the done row:\n%s", screen)
 	}
 }
 
 func doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking(t *testing.T) {
-	recorder := &claudeInputRecorder{screens: []string{herdrtest.CapturedScreen(t, "claude-input-empty.ansi")}}
+	recorder := &agentRecorder{}
 	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(60, 12)
-	model.claude, model.claudePaneID, model.agentStatus = recorder, "3", "working"
+	model.agent, model.agentStatus = recorder, AgentWorking
 	pressed, _ := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
-	if _, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: "done"}); takeInput == nil {
+	if _, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: AgentDone}); takeInput == nil {
 		t.Fatal("Claude stopping after Esc returned no command")
 	} else if _, isTurnEnd := takeInput().(turnEndedMsg); isTurnEnd {
 		t.Error("Claude stopping after Esc ended the turn with a done row")
 	}
-	model.agentStatus = "idle"
-	if _, cmd := model.Update(agentStatusMsg{status: "done"}); cmd != nil {
+	model.agentStatus = AgentIdle
+	if _, cmd := model.Update(agentStatusMsg{status: AgentDone}); cmd != nil {
 		t.Errorf("a status change Claude never worked before returned %#v, want none", cmd())
 	}
 }
@@ -1139,15 +1142,15 @@ func modelWithPaste(typed string, content string) zenModel {
 }
 
 func longPasteShowsAsLabelAndEnterSendsWholeText(t *testing.T) {
-	recorder := &claudeInputRecorder{}
+	recorder := &agentRecorder{}
 	model := modelWithPaste("look at ", fourLinePaste)
-	model.claude, model.claudePaneID = recorder, "3"
+	model.agent = recorder
 	if value := model.input.Value(); value != "look at [Pasted text #1 +3 lines]" {
 		t.Fatalf("input after the paste = %q, want the paste's label", value)
 	}
 	sent, send := model.withKey(pressedKey(tea.KeyEnter))
 	send()
-	if want := []string{"prompt 3 look at line one\nline two\nline three\nline four"}; !reflect.DeepEqual(recorder.calls, want) {
+	if want := []string{"prompt look at line one\nline two\nline three\nline four"}; !reflect.DeepEqual(recorder.calls, want) {
 		t.Errorf("sent %q, want %q", recorder.calls, want)
 	}
 	if row := bandTextRow(sent.(zenModel), "look at [Pasted text #1 +3 lines]"); row == "" {
@@ -1156,16 +1159,16 @@ func longPasteShowsAsLabelAndEnterSendsWholeText(t *testing.T) {
 }
 
 func ctrlEnterSendsWholeTextAndRefusalCarriesPastes(t *testing.T) {
-	recorder := &claudeInputRecorder{promptErr: herdr.ErrAgentBlocked}
+	recorder := &agentRecorder{promptErr: ErrAgentBlocked}
 	model := modelWithPaste("look at ", fourLinePaste)
-	model.claude, model.claudePaneID = recorder, "3"
+	model.agent = recorder
 	_, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
 	paste := "line one\nline two\nline three\nline four"
-	want := promptSentMsg{prompt: "look at " + paste, pastes: []string{paste}, err: herdr.ErrAgentBlocked}
+	want := promptSentMsg{prompt: "look at " + paste, pastes: []string{paste}, err: ErrAgentBlocked}
 	if msg := send(); !reflect.DeepEqual(msg, want) {
 		t.Errorf("ctrl+enter's command returned %#v, want %#v", msg, want)
 	}
-	if wantCalls := []string{"prompt 3 look at " + paste}; !reflect.DeepEqual(recorder.calls, wantCalls) {
+	if wantCalls := []string{"prompt look at " + paste}; !reflect.DeepEqual(recorder.calls, wantCalls) {
 		t.Errorf("sent %q, want %q", recorder.calls, wantCalls)
 	}
 }
@@ -1183,7 +1186,7 @@ func failedSendPutsPastesBackAsLabelsNumberedInOrder(t *testing.T) {
 	sentModel := sent.(zenModel)
 	pastedSince, _ := sentModel.Update(tea.PasteMsg{Content: "w\nx\ny\nz"})
 	refused, _ := pastedSince.Update(promptSentMsg{prompt: "look at line one\nline two\nline three\nline four",
-		pastes: []string{"line one\nline two\nline three\nline four"}, err: herdr.ErrAgentBlocked})
+		pastes: []string{"line one\nline two\nline three\nline four"}, err: ErrAgentBlocked})
 	refusedModel := refused.(zenModel)
 	if want := "look at [Pasted text #1 +3 lines]\n[Pasted text #2 +3 lines]"; refusedModel.input.Value() != want {
 		t.Errorf("input after the refused send = %q, want %q", refusedModel.input.Value(), want)
@@ -1207,15 +1210,15 @@ func transcriptPromptReplacingBandShowsBandsPastesAsLabels(t *testing.T) {
 }
 
 func zenViewSavesDraftWithPastesExpanded(t *testing.T) {
-	draftFile := filepath.Join(t.TempDir(), "draft")
-	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}, draftFile: draftFile, savedDraft: ""}
-	view, _ = view.Update(tea.PasteMsg{Content: fourLinePaste})
-	draft, err := os.ReadFile(draftFile)
-	if err != nil {
-		t.Fatal(err)
+	draft := ""
+	saveDraft := func(text string) error {
+		draft = text
+		return nil
 	}
-	if want := "line one\nline two\nline three\nline four"; string(draft) != want {
+	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
+		input: NewPromptInput()}, saveDraft: saveDraft, savedDraft: ""}
+	view, _ = view.Update(tea.PasteMsg{Content: fourLinePaste})
+	if want := "line one\nline two\nline three\nline four"; draft != want {
 		t.Errorf("draft = %q, want %q", draft, want)
 	}
 }
@@ -1225,19 +1228,19 @@ func TestDraftSavingView(t *testing.T) {
 }
 
 func zenViewSavesUnsentTextAsDraftOfItsClaudePane(t *testing.T) {
-	draftFile := filepath.Join(t.TempDir(), "draft")
+	draft := ""
+	saveDraft := func(text string) error {
+		draft = text
+		return nil
+	}
 	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}, draftFile: draftFile, savedDraft: ""}
+		input: NewPromptInput()}, saveDraft: saveDraft, savedDraft: ""}
 	for _, keyPress := range []tea.KeyPressMsg{
 		{Code: 'h', Text: "h"}, {Code: 'i', Text: "i"}, {Code: tea.KeyEnter, Mod: tea.ModShift}, {Code: 'x', Text: "x"},
 	} {
 		view, _ = view.Update(keyPress)
 	}
-	draft, err := os.ReadFile(draftFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if string(draft) != "hi\nx" {
+	if draft != "hi\nx" {
 		t.Errorf("draft = %q, want %q", draft, "hi\nx")
 	}
 }

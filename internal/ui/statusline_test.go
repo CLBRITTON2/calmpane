@@ -56,7 +56,7 @@ func claudeStatusLineDrawnUnderSeparatorWithItsColorsAndCutAtWidth(t *testing.T)
 
 func blankRowSeparatesNewestEntryFromWorkingRow(t *testing.T) {
 	model := modelWithClaudeStatusLine(roseLocation)
-	model.agentStatus = "working"
+	model.agentStatus = AgentWorking
 	rows := strings.Split(model.screen(), "\n")
 	if newest := ansi.Strip(rows[5]); !strings.Contains(newest, "prompt 20") {
 		t.Errorf("row 6 = %q, want the newest prompt", newest)

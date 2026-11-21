@@ -1,7 +1,6 @@
 package claudecode
 
 import (
-	"encoding/json"
 	"errors"
 	"io/fs"
 	"os"
@@ -9,18 +8,10 @@ import (
 	"strings"
 	"testing"
 	"time"
-
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr/herdrtest"
 )
 
-func TestMain(m *testing.M) {
-	herdrtest.Main(m)
-}
-
 func TestConversationSession(t *testing.T) {
-	t.Run("zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript",
-		zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript)
+	t.Run("zenViewWaitsForFirstPromptBeforeOpeningTranscript", zenViewWaitsForFirstPromptBeforeOpeningTranscript)
 	t.Run("conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened", conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened)
 	t.Run("zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened",
 		zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened)
@@ -32,32 +23,18 @@ func TestConversationSession(t *testing.T) {
 		conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob)
 }
 
-func zenViewWaitsForNewClaudeSessionAndFirstPromptBeforeOpeningTranscript(t *testing.T) {
+func zenViewWaitsForFirstPromptBeforeOpeningTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
 	opened := make(chan *os.File, 1)
 	go func() {
-		transcript, _, err := WaitForTranscriptAndStatusLinePath(cli, "w1:p1")
+		transcript, _, err := WaitForTranscriptAndStatusLinePath(sessionID)
 		if err != nil {
 			t.Error(err)
 		}
 		opened <- transcript
 	}()
-	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
-	startedPane := herdrtest.ClaudePane("w1:p1", true)
-	startedPane.AgentSession = &struct {
-		Agent string `json:"agent"`
-		Value string `json:"value"`
-	}{Agent: "claude", Value: sessionID}
-	panesJSON, err := json.Marshal([]herdr.Pane{startedPane})
-	if err != nil {
-		t.Fatal(err)
-	}
-	time.Sleep(time.Second)
-	if err := os.WriteFile(filepath.Join(os.Getenv(herdrtest.FakeDirEnv), "panes.json"), panesJSON, 0o644); err != nil {
-		t.Fatal(err)
-	}
 	time.Sleep(time.Second)
 	select {
 	case <-opened:
@@ -135,16 +112,10 @@ func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *tes
 	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
 	const jobSessionID = "26f6d8f1-0a40-4e74-a315-4e535d101fd3"
-	viewerPane := herdrtest.ClaudePane("w1:p1", true)
-	viewerPane.AgentSession = &struct {
-		Agent string `json:"agent"`
-		Value string `json:"value"`
-	}{Agent: "claude", Value: viewerSessionID}
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{viewerPane})
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
 	writeTestJobState(t, home, "26f6d8f1", `{"sessionId":"`+jobSessionID+`"}`)
 	writeTestTranscript(t, home, jobSessionID, "")
-	transcript, statusLinePath, err := WaitForTranscriptAndStatusLinePath(cli, "w1:p1")
+	transcript, statusLinePath, err := WaitForTranscriptAndStatusLinePath(viewerSessionID)
 	if err != nil {
 		t.Fatal(err)
 	}
