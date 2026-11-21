@@ -1,5 +1,5 @@
-// Command zen shows the dialogue of a Claude session, in a herdr pane or over the Claude `zen claude` starts: the
-// user's prompts, Claude's reply text and its questions.
+// Command calmpane shows the dialogue of a Claude session, in a herdr pane or over the Claude `calmpane claude`
+// starts: the user's prompts, Claude's reply text and its questions.
 package main
 
 import (
@@ -8,10 +8,10 @@ import (
 	"os"
 	"strconv"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/ptyagent"
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
-	"github.com/CLBRITTON2/herdr-zen/internal/zenmode"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/ptyagent"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/zenmode"
 )
 
 func main() {
@@ -34,7 +34,7 @@ func main() {
 	}
 	cli := herdr.CLI{Binary: os.Getenv("HERDR_BIN_PATH"), PluginID: os.Getenv("HERDR_PLUGIN_ID")}
 	if cli.Binary == "" || cli.PluginID == "" {
-		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH or HERDR_PLUGIN_ID is not set: zen runs from a herdr plugin")
+		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH or HERDR_PLUGIN_ID is not set: calmpane runs from a herdr plugin")
 		os.Exit(2)
 	}
 	var err error
@@ -63,7 +63,7 @@ func main() {
 			return zenmode.FocusAgentOrItsZenPane(cli, mode, agentNumber)
 		})
 	default:
-		err = errors.New("usage: zen [toggle|on|focus|focus-agent <number>|claude [claude arguments...]|hook <state file>]")
+		err = errors.New("usage: calmpane [toggle|on|focus|focus-agent <number>|claude [claude arguments...]|hook <state file>]")
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 // HerdrAgent is the Claude in herdr pane ClaudePaneID.

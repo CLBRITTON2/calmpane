@@ -8,7 +8,7 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 func RunClaudeUnderZenView(claudeArguments []string) (int, error) {
@@ -18,7 +18,7 @@ func RunClaudeUnderZenView(claudeArguments []string) (int, error) {
 	}
 	width, height, err := term.GetSize(os.Stdout.Fd())
 	if err != nil {
-		return 0, fmt.Errorf("zen claude runs in a terminal: %w", err)
+		return 0, fmt.Errorf("calmpane claude runs in a terminal: %w", err)
 	}
 	hookDir, err := os.MkdirTemp("", "zen-claude-")
 	if err != nil {

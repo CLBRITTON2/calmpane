@@ -5,7 +5,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/CLBRITTON2/herdr-zen/claudecode"
+	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 type agentScreenChangedMsg struct{}

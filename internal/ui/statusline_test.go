@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/claudecode"
+	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 const roseLocation = "\x1b[38;2;235;188;186mherdr-zen/zen-status-line\x1b[0m"

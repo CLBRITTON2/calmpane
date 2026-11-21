@@ -19,7 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/claudecode"
+	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 // toggleKey is the key windows-dev's herdr/config.toml binds to the windows-dev.zen.toggle action.

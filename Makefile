@@ -3,7 +3,7 @@
 .PHONY: install fmt test
 
 install:
-	go install ./cmd/zen
+	go install ./cmd/calmpane
 
 fmt:
 	gofmt -w claudecode cmd internal

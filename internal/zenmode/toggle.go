@@ -9,7 +9,7 @@ import (
 
 	"golang.org/x/sys/windows"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
 )
 
 const mutexTimeoutMs = 10000
@@ -192,7 +192,7 @@ func ZenPaneActionForFocusedPane(panes []herdr.Pane) (zenPaneAction, error) {
 }
 
 // CloseZenPanesMoveDraftsAndFocusAgent also closes the zen panes a herdr server restart brought back as plain shells,
-// which keep the zen pane's title but lost zen.exe and the claude_pane token.
+// which keep the zen pane's title but lost calmpane.exe and the claude_pane token.
 func CloseZenPanesMoveDraftsAndFocusAgent(cli herdr.CLI, mode Mode, panes []herdr.Pane) error {
 	focusedPane, err := FocusedPane(panes)
 	if err != nil {
@@ -248,7 +248,7 @@ func (m Mode) WhileLocked(work func() error) error {
 		return errors.Join(fmt.Errorf("wait for mutex %s: %w", m.mutexName, err), windows.CloseHandle(mutex))
 	}
 	if waitResult != windows.WAIT_OBJECT_0 && waitResult != windows.WAIT_ABANDONED {
-		return errors.Join(fmt.Errorf("another zen.exe held mutex %s for over %d ms", m.mutexName, mutexTimeoutMs),
+		return errors.Join(fmt.Errorf("another calmpane.exe held mutex %s for over %d ms", m.mutexName, mutexTimeoutMs),
 			windows.CloseHandle(mutex))
 	}
 	workErr := work()
@@ -258,7 +258,7 @@ func (m Mode) WhileLocked(work func() error) error {
 func ModeOfPlugin(pluginID string) (Mode, error) {
 	stateDir := os.Getenv("HERDR_PLUGIN_STATE_DIR")
 	if stateDir == "" {
-		return Mode{}, errors.New("HERDR_PLUGIN_STATE_DIR is not set: zen runs from a herdr plugin")
+		return Mode{}, errors.New("HERDR_PLUGIN_STATE_DIR is not set: calmpane runs from a herdr plugin")
 	}
 	session := os.Getenv("HERDR_SESSION")
 	if session == "" {

@@ -79,7 +79,7 @@ func parseHookStateIsWholeOnlyForKnownStatusAndSessionEndingInLF(t *testing.T) {
 
 func writeHookSettingsRunsZenHookOnEachEventAndOnlyPromptNotifications(t *testing.T) {
 	settingsFile := filepath.Join(t.TempDir(), "settings.json")
-	if err := WriteHookSettings(settingsFile, `C:\bin\zen.exe`, `C:\Temp\zen-claude-1\state`); err != nil {
+	if err := WriteHookSettings(settingsFile, `C:\bin\calmpane.exe`, `C:\Temp\zen-claude-1\state`); err != nil {
 		t.Fatal(err)
 	}
 	content, err := os.ReadFile(settingsFile)
@@ -90,7 +90,7 @@ func writeHookSettingsRunsZenHookOnEachEventAndOnlyPromptNotifications(t *testin
 	if err := json.Unmarshal(content, &settings); err != nil {
 		t.Fatal(err)
 	}
-	wantCommand := `"C:/bin/zen.exe" hook "C:/Temp/zen-claude-1/state"`
+	wantCommand := `"C:/bin/calmpane.exe" hook "C:/Temp/zen-claude-1/state"`
 	for hookEvent, wantMatcher := range map[string]string{
 		"SessionStart": "", "UserPromptSubmit": "", "PostToolUse": "", "Stop": "",
 		"Notification": "permission_prompt|elicitation_dialog",

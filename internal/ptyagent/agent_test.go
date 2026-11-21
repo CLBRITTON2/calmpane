@@ -12,7 +12,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"golang.org/x/sys/windows"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 func TestMain(m *testing.M) {

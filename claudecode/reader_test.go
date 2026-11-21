@@ -7,7 +7,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/CLBRITTON2/herdr-zen/claudecode"
+	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 func TestReadSession(t *testing.T) {

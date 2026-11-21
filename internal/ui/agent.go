@@ -7,7 +7,7 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/CLBRITTON2/herdr-zen/claudecode"
+	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 // Agent is the coding agent whose dialogue the zen view shows and whose input it sends.

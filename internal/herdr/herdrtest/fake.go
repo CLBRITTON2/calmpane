@@ -10,7 +10,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
 )
 
 // Main runs the tests, or acts as herdr's CLI when a test started the test binary as herdr.

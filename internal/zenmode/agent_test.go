@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr/herdrtest"
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 func TestHerdrAgent(t *testing.T) {

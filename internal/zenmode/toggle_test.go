@@ -8,8 +8,8 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr/herdrtest"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
 )
 
 func TestMain(m *testing.M) {

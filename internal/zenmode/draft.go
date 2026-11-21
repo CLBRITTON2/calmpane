@@ -8,8 +8,8 @@ import (
 	"slices"
 	"strings"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/herdr"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 // DraftFile holds the unsent text of the zen view over claudePaneID. A pane id holds a colon, which a Windows file

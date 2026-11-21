@@ -1,4 +1,4 @@
-module github.com/CLBRITTON2/herdr-zen
+module github.com/CLBRITTON2/calmpane
 
 go 1.27.3
 

@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 // hookState is what the last hook Claude ran wrote to the state file.
@@ -48,7 +48,7 @@ func WriteHookState(stateFile string, hookStdin io.Reader) error {
 	}
 	status, hooked := statusOfHookEvent[input.HookEventName]
 	if !hooked {
-		return fmt.Errorf("zen hook does not handle %q", input.HookEventName)
+		return fmt.Errorf("calmpane hook does not handle %q", input.HookEventName)
 	}
 	if input.SessionID == "" {
 		return fmt.Errorf("Claude Code ran the %s hook with no session_id", input.HookEventName)

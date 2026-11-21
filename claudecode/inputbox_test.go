@@ -3,7 +3,7 @@ package claudecode
 import (
 	"testing"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/herdr/herdrtest"
+	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
 )
 
 func TestClaudeInputBox(t *testing.T) {

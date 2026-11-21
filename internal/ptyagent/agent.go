@@ -20,7 +20,7 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/sys/windows"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/ui"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 // Agent is a Claude Code started in a pseudo-console, whose screen a terminal emulator keeps and whose session and
