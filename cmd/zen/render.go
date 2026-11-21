@@ -32,6 +32,7 @@ var (
 	optionStyle     = lipgloss.NewStyle().Foreground(lipgloss.Color(colorSubtle))
 	workingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
 	waitingStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color(colorGold))
+	doneStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color(colorFoam))
 	errorStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color(colorLove))
 	separatorStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHighlightMed))
 )

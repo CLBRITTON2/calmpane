@@ -1087,7 +1087,7 @@ func TestTheWorkingRowCutsTheToolCallAtTheViewWidthAndKeepsTheTime(t *testing.T)
 	}
 }
 
-func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesWithTwoDigitSecondsFromOne(t *testing.T) {
+func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne(t *testing.T) {
 	cases := []struct {
 		elapsed time.Duration
 		want    string
@@ -1095,8 +1095,9 @@ func TestTurnDurationShowsSecondsUnderAMinuteAndMinutesWithTwoDigitSecondsFromOn
 		{elapsed: 0, want: "0s"},
 		{elapsed: 42*time.Second + 900*time.Millisecond, want: "42s"},
 		{elapsed: 59 * time.Second, want: "59s"},
-		{elapsed: time.Minute, want: "1m00s"},
-		{elapsed: 3*time.Minute + 5*time.Second, want: "3m05s"},
+		{elapsed: time.Minute, want: "1m 0s"},
+		{elapsed: time.Minute + 11*time.Second, want: "1m 11s"},
+		{elapsed: 3*time.Minute + 5*time.Second, want: "3m 5s"},
 	}
 	for _, testCase := range cases {
 		if got := TurnDuration(testCase.elapsed); got != testCase.want {
@@ -1150,6 +1151,51 @@ func TestTheClockTicksWhileWorkingAndTheRowClearsWhenTheTurnEnds(t *testing.T) {
 	stopped, afterIdle := idle.(zenModel).Update(clockTickMsg{now: tick.now.Add(4 * time.Second)})
 	if afterIdle != nil || stopped.(zenModel).clockTicking {
 		t.Errorf("a tick after the turn ended scheduled another")
+	}
+}
+
+func TestTheDoneRowShowsTheTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) {
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 12)
+	promptTime := time.Now().Add(-time.Hour)
+	read, _ := model.Update(entriesReadMsg{turn: currentTurn{promptTime: promptTime}})
+	working, _ := read.(zenModel).Update(agentStatusMsg{status: "working"})
+	stopped, endTurn := working.(zenModel).Update(agentStatusMsg{status: "done"})
+	if endTurn == nil {
+		t.Fatal("Claude stopping work returned no command to end the turn")
+	}
+	if _, isTurnEnd := endTurn().(turnEndedMsg); !isTurnEnd {
+		t.Fatalf("Claude stopping work's command returned %#v, want a turn end", endTurn())
+	}
+	restarted, _ := stopped.(zenModel).Update(agentStatusMsg{status: "working"})
+	late, _ := restarted.(zenModel).Update(turnEndedMsg{now: promptTime.Add(time.Minute)})
+	if screen := ansi.Strip(late.(zenModel).screen()); strings.Contains(screen, "Done") {
+		t.Errorf("a turn end arriving after Claude worked again showed the done row:\n%s", screen)
+	}
+	ended, _ := stopped.(zenModel).Update(turnEndedMsg{now: promptTime.Add(time.Minute + 11*time.Second)})
+	if screen := ansi.Strip(ended.(zenModel).screen()); !strings.Contains(screen, " Done · 1m 11s") {
+		t.Errorf("screen after the turn ended lacks the done row:\n%s", screen)
+	}
+	again, _ := ended.(zenModel).Update(agentStatusMsg{status: "working"})
+	if screen := ansi.Strip(again.(zenModel).screen()); strings.Contains(screen, "Done") {
+		t.Errorf("screen with Claude working again still shows the done row:\n%s", screen)
+	}
+}
+
+func TestTheDoneRowStaysHiddenWhenAnEscInterruptedTheTurnOrClaudeWasNeverSeenWorking(t *testing.T) {
+	recorder := &claudeInputRecorder{screens: []string{readTestScreen(t, "claude-input-empty.ansi")}}
+	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(60, 12)
+	model.claude, model.claudePaneID, model.agentStatus = recorder, "3", "working"
+	pressed, _ := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
+	if _, takeInput := pressed.(zenModel).Update(agentStatusMsg{status: "done"}); takeInput == nil {
+		t.Fatal("Claude stopping after Esc returned no command")
+	} else if _, isTurnEnd := takeInput().(turnEndedMsg); isTurnEnd {
+		t.Error("Claude stopping after Esc ended the turn with a done row")
+	}
+	model.agentStatus = "idle"
+	if _, cmd := model.Update(agentStatusMsg{status: "done"}); cmd != nil {
+		t.Errorf("a status change Claude never worked before returned %#v, want none", cmd())
 	}
 }
 

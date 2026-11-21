@@ -45,6 +45,10 @@ type clockTickMsg struct {
 	now time.Time
 }
 
+type turnEndedMsg struct {
+	now time.Time
+}
+
 // problemMsg carries a failure the view keeps running through, shown on the status line.
 type problemMsg struct {
 	err error
@@ -103,6 +107,8 @@ type zenModel struct {
 	turn          currentTurn
 	now           time.Time
 	clockTicking  bool
+	// endedTurnRow reports the turn this view saw end, until Claude works or blocks again.
+	endedTurnRow string
 	// status reports the latest problem in place of the agent status row, until the agent status changes.
 	status string
 	// copyStatus reports a ctrl+y copy in place of status until the next key or status.
@@ -428,7 +434,7 @@ func TurnDuration(elapsed time.Duration) string {
 	if seconds < 60 {
 		return fmt.Sprintf("%ds", seconds)
 	}
-	return fmt.Sprintf("%dm%02ds", seconds/60, seconds%60)
+	return fmt.Sprintf("%dm %ds", seconds/60, seconds%60)
 }
 
 func (m zenModel) Init() tea.Cmd {
@@ -449,15 +455,20 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentStatusMsg:
+		turnEnded := m.agentStatus == "working" && (msg.status == "idle" || msg.status == "done")
 		m.agentStatus = msg.status
 		m.status = ""
 		m.copyStatus = ""
+		m.endedTurnRow = ""
 		if msg.status != "working" && m.interrupting {
 			m.interrupting = false
 			return m, func() tea.Msg {
 				text, err := TakeAgentInput(m.claude, m.claudePaneID)
 				return agentInputTakenMsg{text: text, err: err}
 			}
+		}
+		if turnEnded {
+			return m, func() tea.Msg { return turnEndedMsg{now: time.Now()} }
 		}
 		if msg.status != "working" || m.clockTicking {
 			return m, nil
@@ -471,6 +482,15 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		return m, tea.Every(time.Second, func(now time.Time) tea.Msg { return clockTickMsg{now: now} })
+	case turnEndedMsg:
+		if m.agentStatus == "working" || m.agentStatus == "blocked" {
+			return m, nil
+		}
+		m.endedTurnRow = "Done"
+		if !m.turn.promptTime.IsZero() {
+			m.endedTurnRow += " · " + TurnDuration(max(msg.now.Sub(m.turn.promptTime), 0))
+		}
+		return m.withVisibleRowsDrawn(), nil
 	case agentInputTakenMsg:
 		if msg.err != nil {
 			m.status = errorStyle.Render(msg.err.Error())
@@ -780,6 +800,9 @@ func (m zenModel) shownStatus() string {
 	}
 	if m.status != "" {
 		return m.status
+	}
+	if m.endedTurnRow != "" {
+		return doneStyle.Render(m.endedTurnRow)
 	}
 	return statusLine(m.agentStatus, m.turn, m.now, m.width)
 }
