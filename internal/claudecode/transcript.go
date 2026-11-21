@@ -1,4 +1,4 @@
-package main
+package claudecode
 
 import (
 	"bytes"
@@ -12,19 +12,19 @@ import (
 	"time"
 )
 
-type entryKind int
+type EntryKind int
 
 const (
-	promptEntry entryKind = iota
-	replyEntry
-	questionEntry
+	PromptEntry EntryKind = iota
+	ReplyEntry
+	QuestionEntry
 )
 
-// A questionEntry holds the question in text and its option labels in options.
-type dialogueEntry struct {
-	kind    entryKind
-	text    string
-	options []string
+// A QuestionEntry holds the question in Text and its option labels in Options.
+type DialogueEntry struct {
+	Kind    EntryKind
+	Text    string
+	Options []string
 }
 
 // Claude Code writes these as user records with string content, though the user did not type them.
@@ -51,13 +51,13 @@ type transcriptRecord struct {
 	} `json:"attachment"`
 }
 
-type queueOperation struct {
-	operation string
-	reason    string
-	// text is the prompt as its band shows it, empty for a dequeue and a dropped_by_hook remove
-	text string
-	// entriesBefore counts the entries of the same read that the transcript holds before this record.
-	entriesBefore int
+type QueueOperation struct {
+	Operation string
+	Reason    string
+	// Text is the prompt as its band shows it, empty for a dequeue and a dropped_by_hook remove
+	Text string
+	// EntriesBefore counts the entries of the same read that the transcript holds before this record.
+	EntriesBefore int
 }
 
 type queueOperationRecord struct {
@@ -80,10 +80,10 @@ type toolCallInput struct {
 	Pattern     string `json:"pattern"`
 }
 
-type currentTurn struct {
-	// promptTime is zero while the tail holds no prompt.
-	promptTime       time.Time
-	toolCallActivity string
+type CurrentTurn struct {
+	// PromptTime is zero while the tail holds no prompt.
+	PromptTime       time.Time
+	ToolCallActivity string
 }
 
 type askUserQuestionInput struct {
@@ -107,7 +107,7 @@ func mayHoldDialogue(line []byte) bool {
 		(bytes.Contains(line, []byte(`"type":"text"`)) || bytes.Contains(line, []byte(`"name":"AskUserQuestion"`)))
 }
 
-func DialogueEntries(line []byte) ([]dialogueEntry, error) {
+func DialogueEntries(line []byte) ([]DialogueEntry, error) {
 	if !mayHoldDialogue(line) {
 		return nil, nil
 	}
@@ -134,7 +134,7 @@ func DialogueEntries(line []byte) ([]dialogueEntry, error) {
 }
 
 // promptEntries holds the prompt in content when it is a string the user typed, and nothing for other content.
-func promptEntries(content json.RawMessage) ([]dialogueEntry, error) {
+func promptEntries(content json.RawMessage) ([]DialogueEntry, error) {
 	if !bytes.HasPrefix(content, []byte(`"`)) {
 		return nil, nil
 	}
@@ -147,14 +147,14 @@ func promptEntries(content json.RawMessage) ([]dialogueEntry, error) {
 			return nil, nil
 		}
 	}
-	return []dialogueEntry{{kind: promptEntry, text: TypedText(prompt)}}, nil
+	return []DialogueEntry{{Kind: PromptEntry, Text: TypedText(prompt)}}, nil
 }
 
 func TypedText(prompt string) string {
 	return strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
 }
 
-func QueueOperations(line []byte) ([]queueOperation, error) {
+func QueueOperations(line []byte) ([]QueueOperation, error) {
 	if !bytes.Contains(line, []byte(`"type":"queue-operation"`)) {
 		return nil, nil
 	}
@@ -165,18 +165,18 @@ func QueueOperations(line []byte) ([]queueOperation, error) {
 	if record.Type != "queue-operation" {
 		return nil, nil
 	}
-	return []queueOperation{{operation: record.Operation, reason: record.Reason, text: TypedText(record.Content)}}, nil
+	return []QueueOperation{{Operation: record.Operation, Reason: record.Reason, Text: TypedText(record.Content)}}, nil
 }
 
-func assistantEntries(content json.RawMessage) ([]dialogueEntry, error) {
+func assistantEntries(content json.RawMessage) ([]DialogueEntry, error) {
 	var blocks []contentBlock
 	if err := json.Unmarshal(content, &blocks); err != nil {
 		return nil, fmt.Errorf("decode assistant content %.80q: %w", content, err)
 	}
-	var entries []dialogueEntry
+	var entries []DialogueEntry
 	for _, block := range blocks {
 		if block.Type == "text" {
-			entries = append(entries, dialogueEntry{kind: replyEntry, text: block.Text})
+			entries = append(entries, DialogueEntry{Kind: ReplyEntry, Text: block.Text})
 		}
 		if block.Type == "tool_use" && block.Name == "AskUserQuestion" {
 			var input askUserQuestionInput
@@ -188,15 +188,15 @@ func assistantEntries(content json.RawMessage) ([]dialogueEntry, error) {
 				for _, option := range question.Options {
 					labels = append(labels, option.Label)
 				}
-				entries = append(entries, dialogueEntry{kind: questionEntry, text: question.Question, options: labels})
+				entries = append(entries, DialogueEntry{Kind: QuestionEntry, Text: question.Question, Options: labels})
 			}
 		}
 	}
 	return entries, nil
 }
 
-func TurnAfterLine(turn currentTurn, line []byte, lineEntries []dialogueEntry) (currentTurn, error) {
-	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry dialogueEntry) bool { return entry.kind == promptEntry })
+func TurnAfterLine(turn CurrentTurn, line []byte, lineEntries []DialogueEntry) (CurrentTurn, error) {
+	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry DialogueEntry) bool { return entry.Kind == PromptEntry })
 	if !holdsPrompt && !bytes.Contains(line, []byte(`"type":"tool_use"`)) {
 		return turn, nil
 	}
@@ -205,11 +205,11 @@ func TurnAfterLine(turn currentTurn, line []byte, lineEntries []dialogueEntry) (
 		return turn, fmt.Errorf("decode transcript line %.80q: %w", line, err)
 	}
 	// A queued_command attachment is a prompt Claude took in mid-turn, so the turn it joins keeps its time.
-	if holdsPrompt && record.Type == "attachment" && !turn.promptTime.IsZero() {
+	if holdsPrompt && record.Type == "attachment" && !turn.PromptTime.IsZero() {
 		return turn, nil
 	}
 	if holdsPrompt {
-		return currentTurn{promptTime: record.Timestamp}, nil
+		return CurrentTurn{PromptTime: record.Timestamp}, nil
 	}
 	if record.Type != "assistant" {
 		return turn, nil
@@ -226,7 +226,7 @@ func TurnAfterLine(turn currentTurn, line []byte, lineEntries []dialogueEntry) (
 		if err != nil {
 			return turn, err
 		}
-		return currentTurn{promptTime: turn.promptTime, toolCallActivity: toolCallActivity}, nil
+		return CurrentTurn{PromptTime: turn.PromptTime, ToolCallActivity: toolCallActivity}, nil
 	}
 	return turn, nil
 }

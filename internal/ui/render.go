@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -8,6 +8,8 @@ import (
 	"charm.land/glamour/v2/ansi"
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
+
+	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
 )
 
 // Rosé Pine main, https://rosepinetheme.com/palette, as perusal uses it. The base background is the terminal's.
@@ -72,21 +74,21 @@ func NewReplyRenderer(width int) (*glamour.TermRenderer, error) {
 
 // EntryRows draws an entry as screen rows, the first row blank to separate it from the entry above. In a reply, the
 // code block numbered copyHintBlock, -1 for none, carries the copy key's hint.
-func EntryRows(entry dialogueEntry, copyHintBlock int, width int, replyRenderer *glamour.TermRenderer) ([]string,
+func EntryRows(entry claudecode.DialogueEntry, copyHintBlock int, width int, replyRenderer *glamour.TermRenderer) ([]string,
 	error) {
 	var blockRows []string
-	switch entry.kind {
-	case promptEntry:
-		return PromptEntryRows(entry.text, "", width), nil
-	case replyEntry:
-		replyRows, err := ReplyRows(entry.text, copyHintBlock, width, replyRenderer)
+	switch entry.Kind {
+	case claudecode.PromptEntry:
+		return PromptEntryRows(entry.Text, "", width), nil
+	case claudecode.ReplyEntry:
+		replyRows, err := ReplyRows(entry.Text, copyHintBlock, width, replyRenderer)
 		if err != nil {
 			return nil, err
 		}
 		blockRows = replyRows
-	case questionEntry:
-		lines := []string{questionStyle.Width(max(width-2, 1)).Render(entry.text)}
-		for number, label := range entry.options {
+	case claudecode.QuestionEntry:
+		lines := []string{questionStyle.Width(max(width-2, 1)).Render(entry.Text)}
+		for number, label := range entry.Options {
 			lines = append(lines, optionStyle.Width(max(width-2, 1)).Render(fmt.Sprintf("  %d. %s", number+1, label)))
 		}
 		blockRows = strings.Split(strings.Join(lines, "\n"), "\n")

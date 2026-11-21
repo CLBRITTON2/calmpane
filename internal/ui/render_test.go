@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"reflect"
@@ -7,6 +7,8 @@ import (
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
 )
 
 func TestEntryRows(t *testing.T) {
@@ -53,11 +55,11 @@ func oneLinePromptIsOneBandRowWithBlankRowBeforeReply(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	promptRows, err := EntryRows(dialogueEntry{kind: promptEntry, text: "ok"}, -1, 40, replyRenderer)
+	promptRows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.PromptEntry, Text: "ok"}, -1, 40, replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows of the prompt: %v", err)
 	}
-	replyRows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Done."}, -1, 40, replyRenderer)
+	replyRows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Done."}, -1, 40, replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows of the reply: %v", err)
 	}
@@ -81,7 +83,7 @@ func replyRowsDropHeadingAndCodeMarkers(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "## Plan\n\nRun `go test` now."}, -1, 60,
+	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "## Plan\n\nRun `go test` now."}, -1, 60,
 		replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
@@ -97,7 +99,7 @@ func replyRowsDrawInlineCodeWithoutBackground(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run `go test` now."}, -1, 60, replyRenderer)
+	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run `go test` now."}, -1, 60, replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
 	}
@@ -107,7 +109,7 @@ func replyRowsDrawInlineCodeWithoutBackground(t *testing.T) {
 }
 
 func questionRowsNumberOptionsFromOne(t *testing.T) {
-	entry := dialogueEntry{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}}
+	entry := claudecode.DialogueEntry{Kind: claudecode.QuestionEntry, Text: "Which color?", Options: []string{"Red (Recommended)", "Blue"}}
 	rows, err := EntryRows(entry, -1, 60, nil)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)
@@ -124,7 +126,7 @@ func replyRowsIndentTabIndentedCodeWithSpaces(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewReplyRenderer: %v", err)
 	}
-	rows, err := EntryRows(dialogueEntry{kind: replyEntry, text: "Run:\n\n    func f() {\n    \treturn\n    }"}, -1, 60,
+	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run:\n\n    func f() {\n    \treturn\n    }"}, -1, 60,
 		replyRenderer)
 	if err != nil {
 		t.Fatalf("EntryRows: %v", err)

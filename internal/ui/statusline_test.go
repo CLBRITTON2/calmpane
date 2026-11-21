@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"os"
@@ -9,12 +9,14 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+
+	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
 )
 
 const roseLocation = "\x1b[38;2;235;188;186mherdr-zen/zen-status-line\x1b[0m"
 
 func modelWithClaudeStatusLine(line string) zenModel {
-	model := zenModel{entries: []dialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	updated, _ := model.Update(claudeStatusLineMsg{line: line})
 	return updated.(zenModel)

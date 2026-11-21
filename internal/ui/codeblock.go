@@ -1,4 +1,4 @@
-package main
+package ui
 
 import (
 	"fmt"
@@ -14,6 +14,8 @@ import (
 	"github.com/yuin/goldmark/ast"
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
+
+	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
 )
 
 type codeBlock struct {
@@ -85,12 +87,12 @@ func CodeBlocks(markdown string) ([]codeBlock, error) {
 
 // NewestCodeBlockPosition is where the newest fenced code block of the entries' replies is, and nil when they hold
 // none.
-func NewestCodeBlockPosition(entries []dialogueEntry) (*codeBlockPosition, error) {
+func NewestCodeBlockPosition(entries []claudecode.DialogueEntry) (*codeBlockPosition, error) {
 	for index := len(entries) - 1; index >= 0; index-- {
-		if entries[index].kind != replyEntry {
+		if entries[index].Kind != claudecode.ReplyEntry {
 			continue
 		}
-		replyBlocks, err := CodeBlocks(entries[index].text)
+		replyBlocks, err := CodeBlocks(entries[index].Text)
 		if err != nil {
 			return nil, err
 		}

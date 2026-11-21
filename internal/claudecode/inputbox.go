@@ -1,4 +1,4 @@
-package main
+package claudecode
 
 import (
 	"slices"
@@ -11,17 +11,17 @@ import (
 // and a plain space.
 const claudeInputMarker = "❯ "
 
-type claudeInputBox struct {
+type InputBox struct {
 	// Draft is empty when the box holds nothing or only a dimmed placeholder.
 	Draft string
 	Rows  int
 }
 
-// ClaudeInputBoxOnScreen reads the box from herdr pane read --format ansi: the rows between the last two rules. A rule
+// InputBoxOnScreen reads the box from herdr pane read --format ansi: the rows between the last two rules. A rule
 // starts and ends with ─ and can carry text inside: the session name a /rename gave, or ↑ in the top rule of a box
 // scrolled past its top, which gives no draft. pane read drops the space at a soft wrap, so the rows are joined with
 // one.
-func ClaudeInputBoxOnScreen(screen string) claudeInputBox {
+func InputBoxOnScreen(screen string) InputBox {
 	rows := strings.Split(screen, "\n")
 	ruleRows := []int{}
 	for index, row := range rows {
@@ -31,11 +31,11 @@ func ClaudeInputBoxOnScreen(screen string) claudeInputBox {
 		}
 	}
 	if len(ruleRows) < 2 {
-		return claudeInputBox{}
+		return InputBox{}
 	}
 	boxRows := rows[ruleRows[len(ruleRows)-2]+1 : ruleRows[len(ruleRows)-1]]
 	if len(boxRows) == 0 || !strings.HasPrefix(ansi.Strip(boxRows[0]), claudeInputMarker) {
-		return claudeInputBox{}
+		return InputBox{}
 	}
 	rowTexts := []string{}
 	holdsUndimmedText := false
@@ -50,9 +50,9 @@ func ClaudeInputBoxOnScreen(screen string) claudeInputBox {
 		holdsUndimmedText = holdsUndimmedText || DrawsUndimmedText(row)
 	}
 	if !holdsUndimmedText {
-		return claudeInputBox{}
+		return InputBox{}
 	}
-	return claudeInputBox{Draft: strings.Join(rowTexts, " "), Rows: len(boxRows)}
+	return InputBox{Draft: strings.Join(rowTexts, " "), Rows: len(boxRows)}
 }
 
 // DrawsUndimmedText reports whether row draws a character other than a space without dim. herdr 0.9.5 writes each SGR

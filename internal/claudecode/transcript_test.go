@@ -1,4 +1,4 @@
-package main
+package claudecode
 
 import (
 	"bytes"
@@ -14,12 +14,12 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 	cases := []struct {
 		name string
 		line string
-		want []dialogueEntry
+		want []DialogueEntry
 	}{
 		{
 			name: "typed prompt shown",
 			line: `{"type":"user","message":{"role":"user","content":"rename the widget"}}`,
-			want: []dialogueEntry{{kind: promptEntry, text: "rename the widget"}},
+			want: []DialogueEntry{{Kind: PromptEntry, Text: "rename the widget"}},
 		},
 		{
 			name: "isMeta user record hidden",
@@ -29,7 +29,7 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 			name: "pasted_content prompt shown as the text it holds",
 			line: `{"type":"user","message":{"role":"user","content":` +
 				`"<pasted_content id=\"a1b2\">\nbuild log line\n</pasted_content id=\"a1b2\">\n\nwhy did it fail"}}`,
-			want: []dialogueEntry{{kind: promptEntry, text: "build log line\n\nwhy did it fail"}},
+			want: []DialogueEntry{{Kind: PromptEntry, Text: "build log line\n\nwhy did it fail"}},
 		},
 		{
 			name: "user tool_result hidden",
@@ -42,7 +42,7 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 				`{"type":"text","text":"Renaming it **now**."},` +
 				`{"type":"tool_use","id":"t2","name":"Bash","input":{"command":"ls"}},` +
 				`{"type":"text","text":"Done."}]}}`,
-			want: []dialogueEntry{{kind: replyEntry, text: "Renaming it **now**."}, {kind: replyEntry, text: "Done."}},
+			want: []DialogueEntry{{Kind: ReplyEntry, Text: "Renaming it **now**."}, {Kind: ReplyEntry, Text: "Done."}},
 		},
 		{
 			name: "assistant with only tool_use hidden",
@@ -55,9 +55,9 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 				`{"question":"Which color?","header":"Color","multiSelect":false,"options":[` +
 				`{"label":"Red (Recommended)","description":"warm"},{"label":"Blue","description":"cool"}]},` +
 				`{"question":"Which size?","header":"Size","multiSelect":false,"options":[{"label":"Small","description":"s"}]}]}}]}}`,
-			want: []dialogueEntry{
-				{kind: questionEntry, text: "Which color?", options: []string{"Red (Recommended)", "Blue"}},
-				{kind: questionEntry, text: "Which size?", options: []string{"Small"}},
+			want: []DialogueEntry{
+				{Kind: QuestionEntry, Text: "Which color?", Options: []string{"Red (Recommended)", "Blue"}},
+				{Kind: QuestionEntry, Text: "Which size?", Options: []string{"Small"}},
 			},
 		},
 		{
@@ -68,13 +68,13 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 			name: "prompt queued while Claude works shown",
 			line: `{"type":"attachment","attachment":{"type":"queued_command","prompt":"also check the logs",` +
 				`"commandMode":"prompt","origin":{"kind":"human"}}}`,
-			want: []dialogueEntry{{kind: promptEntry, text: "also check the logs"}},
+			want: []DialogueEntry{{Kind: PromptEntry, Text: "also check the logs"}},
 		},
 		{
 			name: "queued pasted_content prompt shown as the text it holds",
 			line: `{"type":"attachment","attachment":{"type":"queued_command",` +
 				`"prompt":"<pasted_content id=\"a1b2\">\nbuild log line\n</pasted_content id=\"a1b2\">\n\nwhy","commandMode":"prompt"}}`,
-			want: []dialogueEntry{{kind: promptEntry, text: "build log line\n\nwhy"}},
+			want: []DialogueEntry{{Kind: PromptEntry, Text: "build log line\n\nwhy"}},
 		},
 		{
 			name: "queued agent message hidden",
@@ -113,7 +113,7 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 		cases = append(cases, struct {
 			name string
 			line string
-			want []dialogueEntry
+			want []DialogueEntry
 		}{
 			name: "user record starting with " + prefix + " hidden",
 			line: `{"type":"user","message":{"role":"user","content":"` + prefix + `>body</x>"}}`,
@@ -208,23 +208,23 @@ func queueOperationsReadOperationReasonAndTypedText(t *testing.T) {
 	cases := []struct {
 		name string
 		line string
-		want []queueOperation
+		want []QueueOperation
 	}{
 		{
 			name: "enqueue with pasted content",
 			line: `{"type":"queue-operation","operation":"enqueue","content":` +
 				`"<pasted_content id=\"a1\">\nlog line\n</pasted_content id=\"a1\">\n\nwhy"}`,
-			want: []queueOperation{{operation: "enqueue", text: "log line\n\nwhy"}},
+			want: []QueueOperation{{Operation: "enqueue", Text: "log line\n\nwhy"}},
 		},
 		{
 			name: "dequeue without text",
 			line: `{"type":"queue-operation","operation":"dequeue"}`,
-			want: []queueOperation{{operation: "dequeue"}},
+			want: []QueueOperation{{Operation: "dequeue"}},
 		},
 		{
 			name: "remove with its reason",
 			line: `{"type":"queue-operation","operation":"remove","reason":"absorbed_mid_turn","content":"go on"}`,
-			want: []queueOperation{{operation: "remove", reason: "absorbed_mid_turn", text: "go on"}},
+			want: []QueueOperation{{Operation: "remove", Reason: "absorbed_mid_turn", Text: "go on"}},
 		},
 		{
 			name: "user record quoting a queue-operation type",
