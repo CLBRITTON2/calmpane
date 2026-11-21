@@ -18,9 +18,9 @@ import (
 // session, naming the session's job by its short id.
 var backgroundJobLine = regexp.MustCompile(`running in the background \(([0-9a-f]+)\)`)
 
-// ConversationSessionID is the session whose transcript holds the conversation shown in a pane that herdr reports as
-// reportedSessionID. A Claude that /resume pointed at a background session reports its own session to herdr, which
-// holds no conversation, while the background session's job writes the conversation under the job's session.
+// ConversationSessionID is the session whose transcript holds the conversation of a Claude whose hooks report
+// reportedSessionID. A Claude that /resume pointed at a background session reports its own session, which holds no
+// conversation, while the background session's job writes the conversation under the job's session.
 func ConversationSessionID(reportedSessionID string) (string, error) {
 	transcript, err := openTranscript(reportedSessionID)
 	// Claude writes the transcript at the first prompt or /resume, so a Claude without one has opened no background
@@ -31,7 +31,7 @@ func ConversationSessionID(reportedSessionID string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	jobID, err := LastOpenedBackgroundJob(transcript)
+	jobID, err := lastOpenedBackgroundJob(transcript)
 	if err := errors.Join(err, transcript.Close()); err != nil {
 		return "", fmt.Errorf("Cannot read %s: %w", transcript.Name(), err)
 	}
@@ -59,9 +59,9 @@ func ConversationSessionID(reportedSessionID string) (string, error) {
 	return state.SessionID, nil
 }
 
-// LastOpenedBackgroundJob reads only the local command entries: a tool result that quotes /resume output escapes its
+// lastOpenedBackgroundJob reads only the local command entries: a tool result that quotes /resume output escapes its
 // quotes, so its line never holds the unescaped subtype.
-func LastOpenedBackgroundJob(transcript io.Reader) (string, error) {
+func lastOpenedBackgroundJob(transcript io.Reader) (string, error) {
 	reader := bufio.NewReader(transcript)
 	jobID := ""
 	for {
@@ -108,13 +108,9 @@ func openTranscript(sessionID string) (*os.File, error) {
 }
 
 // WaitForTranscript waits for a Claude that just started, which writes the transcript of reportedSessionID at the
-// first prompt. Claude writes its status line before that, so the status line path of each conversation session found
-// while waiting goes to statusLinePaths at once.
-func WaitForTranscript(reportedSessionID string, statusLinePaths chan<- string) (*os.File, error) {
-	localAppData, err := os.UserCacheDir()
-	if err != nil {
-		return nil, fmt.Errorf("find the local app data directory: %w", err)
-	}
+// first prompt. Claude runs its status line before that, so each conversation session found while waiting goes to
+// conversationSessionIDs at once.
+func WaitForTranscript(reportedSessionID string, conversationSessionIDs chan<- string) (*os.File, error) {
 	sentSessionID := ""
 	for {
 		sessionID, err := ConversationSessionID(reportedSessionID)
@@ -122,8 +118,7 @@ func WaitForTranscript(reportedSessionID string, statusLinePaths chan<- string) 
 			return nil, err
 		}
 		if sessionID != sentSessionID {
-			// windows-dev's claude/statusline.ps1 writes it
-			statusLinePaths <- filepath.Join(localAppData, "windows-dev", "statusline", sessionID)
+			conversationSessionIDs <- sessionID
 			sentSessionID = sessionID
 		}
 		transcript, err := openTranscript(sessionID)

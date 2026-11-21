@@ -32,6 +32,43 @@ From a clone, `make` installs it and `make test` vets and tests it.
 | pgup, pgdown | Scroll a page                                                     |
 | end          | Jump to the newest entry                                          |
 
+## Reading Claude Code transcripts from Go
+
+The `claudecode` package reads a Claude Code session for other tools: its transcript, the prompts, replies and
+questions its records hold, and Claude's input box on a captured screen. The transcript format is Claude Code's own,
+not a stable API, so a Claude Code release can change what it reads.
+
+```go
+import "github.com/CLBRITTON2/herdr-zen/claudecode"
+
+// sessionID is the session_id Claude Code passes its hooks. WaitForTranscript sends each session whose transcript
+// holds the conversation as it finds it, which a /resume of a background session changes.
+conversationSessionIDs := make(chan string)
+go func() {
+	for range conversationSessionIDs {
+	}
+}()
+transcript, err := claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
+if err != nil {
+	return err
+}
+defer transcript.Close()
+scanner := bufio.NewScanner(transcript)
+scanner.Buffer(nil, 64*1024*1024)
+for scanner.Scan() {
+	entries, err := claudecode.DialogueEntries(scanner.Bytes())
+	if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		fmt.Println(entry.Kind, entry.Text)
+	}
+}
+return scanner.Err()
+```
+
+`TailStart` finds where to start reading the last bytes of a long transcript.
+
 ## License
 
 [Apache-2.0](LICENSE)

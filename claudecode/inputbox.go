@@ -17,9 +17,9 @@ type InputBox struct {
 	Rows  int
 }
 
-// InputBoxOnScreen reads the box from herdr pane read --format ansi: the rows between the last two rules. A rule
-// starts and ends with ─ and can carry text inside: the session name a /rename gave, or ↑ in the top rule of a box
-// scrolled past its top, which gives no draft. pane read drops the space at a soft wrap, so the rows are joined with
+// InputBoxOnScreen reads the box from a screen captured with its SGR sequences: the rows between the last two rules. A
+// rule starts and ends with ─ and can carry text inside: the session name a /rename gave, or ↑ in the top rule of a box
+// scrolled past its top, which gives no draft. A capture drops the space at a soft wrap, so the rows are joined with
 // one.
 func InputBoxOnScreen(screen string) InputBox {
 	rows := strings.Split(screen, "\n")
@@ -47,7 +47,7 @@ func InputBoxOnScreen(screen string) InputBox {
 		if text != "" {
 			rowTexts = append(rowTexts, text)
 		}
-		holdsUndimmedText = holdsUndimmedText || DrawsUndimmedText(row)
+		holdsUndimmedText = holdsUndimmedText || drawsUndimmedText(row)
 	}
 	if !holdsUndimmedText {
 		return InputBox{}
@@ -55,9 +55,9 @@ func InputBoxOnScreen(screen string) InputBox {
 	return InputBox{Draft: strings.Join(rowTexts, " "), Rows: len(boxRows)}
 }
 
-// DrawsUndimmedText reports whether row draws a character other than a space without dim. herdr 0.9.5 writes each SGR
+// drawsUndimmedText reports whether row draws a character other than a space without dim. herdr 0.9.5 writes each SGR
 // attribute as its own sequence, so dim is \x1b[2m and its end a reset.
-func DrawsUndimmedText(row string) bool {
+func drawsUndimmedText(row string) bool {
 	dimmed := false
 	var state byte
 	for len(row) > 0 {

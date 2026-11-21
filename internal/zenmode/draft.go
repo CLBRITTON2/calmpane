@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 	"github.com/CLBRITTON2/herdr-zen/internal/herdr"
 )
 

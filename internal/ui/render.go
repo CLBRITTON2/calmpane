@@ -9,7 +9,7 @@ import (
 	"charm.land/glamour/v2/styles"
 	"charm.land/lipgloss/v2"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 // Rosé Pine main, https://rosepinetheme.com/palette, as perusal uses it. The base background is the terminal's.

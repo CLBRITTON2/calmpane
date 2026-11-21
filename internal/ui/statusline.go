@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"path/filepath"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
@@ -18,10 +19,10 @@ type claudeStatusLineMsg struct {
 	line string
 }
 
-// followClaudeStatusLine follows the latest path from paths, starting once the first arrives. statusline.ps1 rewrites
-// the file in place, so content not ending in a newline is a write in progress.
-func followClaudeStatusLine(paths <-chan string, interval time.Duration, send func(tea.Msg)) {
-	path := <-paths
+// followClaudeStatusLine follows the file in statusLineDir of the latest session from sessionIDs, starting once the
+// first arrives. statusline.ps1 rewrites the file in place, so content not ending in a newline is a write in progress.
+func followClaudeStatusLine(statusLineDir string, sessionIDs <-chan string, interval time.Duration, send func(tea.Msg)) {
+	path := filepath.Join(statusLineDir, <-sessionIDs)
 	sentLine := ""
 	for {
 		content, err := os.ReadFile(path)
@@ -41,7 +42,8 @@ func followClaudeStatusLine(paths <-chan string, interval time.Duration, send fu
 			}
 		}
 		select {
-		case path = <-paths:
+		case sessionID := <-sessionIDs:
+			path = filepath.Join(statusLineDir, sessionID)
 		case <-time.After(interval):
 		}
 	}

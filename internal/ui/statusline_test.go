@@ -10,7 +10,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 const roseLocation = "\x1b[38;2;235;188;186mherdr-zen/zen-status-line\x1b[0m"
@@ -121,35 +121,34 @@ func writeStatusLineFile(t *testing.T, path string, content string) {
 func TestFollowClaudeStatusLine(t *testing.T) {
 	t.Run("followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes", followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes)
 	t.Run("followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt", followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt)
-	t.Run("followClaudeStatusLineFollowsNewestPathSent", followClaudeStatusLineFollowsNewestPathSent)
+	t.Run("followClaudeStatusLineFollowsNewestSessionSent", followClaudeStatusLineFollowsNewestSessionSent)
 }
 
-func followClaudeStatusLineFollowsNewestPathSent(t *testing.T) {
+func followClaudeStatusLineFollowsNewestSessionSent(t *testing.T) {
 	directory := t.TempDir()
-	viewerPath := filepath.Join(directory, "viewer-session-id")
-	jobPath := filepath.Join(directory, "job-session-id")
-	writeStatusLineFile(t, viewerPath, "viewer\n")
-	writeStatusLineFile(t, jobPath, "job\n")
+	writeStatusLineFile(t, filepath.Join(directory, "viewer-session-id"), "viewer\n")
+	writeStatusLineFile(t, filepath.Join(directory, "job-session-id"), "job\n")
 	messages := make(chan tea.Msg, 16)
-	// buffered, so a follower that stopped taking paths fails the test instead of hanging it
-	paths := make(chan string, 1)
-	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
-	paths <- viewerPath
+	// buffered, so a follower that stopped taking sessions fails the test instead of hanging it
+	sessionIDs := make(chan string, 1)
+	go followClaudeStatusLine(directory, sessionIDs, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	sessionIDs <- "viewer-session-id"
 	if line := nextClaudeStatusLine(t, messages); line != "viewer" {
 		t.Errorf("line = %q, want %q", line, "viewer")
 	}
-	paths <- jobPath
+	sessionIDs <- "job-session-id"
 	if line := nextClaudeStatusLine(t, messages); line != "job" {
-		t.Errorf("line after the job's path = %q, want %q", line, "job")
+		t.Errorf("line after the job's session = %q, want %q", line, "job")
 	}
 }
 
 func followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "session-id")
+	directory := t.TempDir()
+	path := filepath.Join(directory, "session-id")
 	messages := make(chan tea.Msg, 16)
-	paths := make(chan string)
-	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
-	paths <- path
+	sessionIDs := make(chan string)
+	go followClaudeStatusLine(directory, sessionIDs, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	sessionIDs <- "session-id"
 	writeStatusLineFile(t, path, roseLocation+"\n")
 	if line := nextClaudeStatusLine(t, messages); line != roseLocation {
 		t.Errorf("line = %q, want %q", line, roseLocation)
@@ -170,11 +169,15 @@ func followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes(t *testing.T) {
 }
 
 func followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt(t *testing.T) {
-	path := t.TempDir()
+	directory := t.TempDir()
+	path := filepath.Join(directory, "session-id")
+	if err := os.Mkdir(path, 0o755); err != nil {
+		t.Fatalf("make %s: %v", path, err)
+	}
 	messages := make(chan tea.Msg, 16)
-	paths := make(chan string)
-	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
-	paths <- path
+	sessionIDs := make(chan string)
+	go followClaudeStatusLine(directory, sessionIDs, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	sessionIDs <- "session-id"
 	select {
 	case msg := <-messages:
 		problem, isProblem := msg.(problemMsg)

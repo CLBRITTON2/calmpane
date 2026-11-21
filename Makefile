@@ -6,7 +6,7 @@ install:
 	go install ./cmd/zen
 
 fmt:
-	gofmt -w cmd internal
+	gofmt -w claudecode cmd internal
 
 test:
 	go vet ./...

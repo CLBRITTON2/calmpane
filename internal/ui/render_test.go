@@ -8,7 +8,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 func TestEntryRows(t *testing.T) {

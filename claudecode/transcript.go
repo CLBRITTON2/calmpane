@@ -63,8 +63,6 @@ type QueueOperation struct {
 	Reason    string
 	// Text is the prompt as its band shows it, empty for a dequeue and a dropped_by_hook remove
 	Text string
-	// EntriesBefore counts the entries of the same read that the transcript holds before this record.
-	EntriesBefore int
 }
 
 type queueOperationRecord struct {
@@ -163,10 +161,10 @@ func promptEntries(content json.RawMessage) ([]DialogueEntry, error) {
 			pastes = append(pastes, paste)
 		}
 	}
-	return []DialogueEntry{{Kind: PromptEntry, Text: TypedText(prompt), Pastes: pastes}}, nil
+	return []DialogueEntry{{Kind: PromptEntry, Text: typedText(prompt), Pastes: pastes}}, nil
 }
 
-func TypedText(prompt string) string {
+func typedText(prompt string) string {
 	return strings.TrimSpace(pastedContentTag.ReplaceAllString(prompt, ""))
 }
 
@@ -181,7 +179,7 @@ func QueueOperations(line []byte) ([]QueueOperation, error) {
 	if record.Type != "queue-operation" {
 		return nil, nil
 	}
-	return []QueueOperation{{Operation: record.Operation, Reason: record.Reason, Text: TypedText(record.Content)}}, nil
+	return []QueueOperation{{Operation: record.Operation, Reason: record.Reason, Text: typedText(record.Content)}}, nil
 }
 
 func assistantEntries(content json.RawMessage) ([]DialogueEntry, error) {
@@ -238,16 +236,16 @@ func TurnAfterLine(turn CurrentTurn, line []byte, lineEntries []DialogueEntry) (
 		if blocks[index].Type != "tool_use" {
 			continue
 		}
-		toolCallActivity, err := ToolCallActivity(blocks[index].Name, blocks[index].Input)
+		activity, err := toolCallActivity(blocks[index].Name, blocks[index].Input)
 		if err != nil {
 			return turn, err
 		}
-		return CurrentTurn{PromptTime: turn.PromptTime, ToolCallActivity: toolCallActivity}, nil
+		return CurrentTurn{PromptTime: turn.PromptTime, ToolCallActivity: activity}, nil
 	}
 	return turn, nil
 }
 
-func ToolCallActivity(toolName string, input json.RawMessage) (string, error) {
+func toolCallActivity(toolName string, input json.RawMessage) (string, error) {
 	var fields toolCallInput
 	if err := json.Unmarshal(input, &fields); err != nil {
 		return "", fmt.Errorf("decode %s input %.80q: %w", toolName, input, err)

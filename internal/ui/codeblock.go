@@ -15,7 +15,7 @@ import (
 	"github.com/yuin/goldmark/extension"
 	"github.com/yuin/goldmark/text"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 type codeBlock struct {

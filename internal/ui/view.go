@@ -7,6 +7,7 @@ import (
 	"io"
 	"math"
 	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"time"
@@ -18,7 +19,7 @@ import (
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 // toggleKey is the key windows-dev's herdr/config.toml binds to the windows-dev.zen.toggle action.
@@ -32,9 +33,15 @@ const inputMaxRows = 8
 
 const inputPrompt = "> "
 
+// placedQueueOperation counts in entriesBefore the entries of the same read that the transcript holds before it.
+type placedQueueOperation struct {
+	claudecode.QueueOperation
+	entriesBefore int
+}
+
 type entriesReadMsg struct {
 	entries         []claudecode.DialogueEntry
-	queueOperations []claudecode.QueueOperation
+	queueOperations []placedQueueOperation
 	turn            claudecode.CurrentTurn
 }
 
@@ -152,9 +159,16 @@ func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, s
 			program.Send(fatalMsg{err: err})
 			return
 		}
-		statusLinePaths := make(chan string)
-		go followClaudeStatusLine(statusLinePaths, 300*time.Millisecond, program.Send)
-		transcript, err := claudecode.WaitForTranscript(sessionID, statusLinePaths)
+		localAppData, err := os.UserCacheDir()
+		if err != nil {
+			program.Send(fatalMsg{err: fmt.Errorf("find the local app data directory: %w", err)})
+			return
+		}
+		conversationSessionIDs := make(chan string)
+		// windows-dev's claude/statusline.ps1 writes a file named for each session there
+		statusLineDir := filepath.Join(localAppData, "windows-dev", "statusline")
+		go followClaudeStatusLine(statusLineDir, conversationSessionIDs, 300*time.Millisecond, program.Send)
+		transcript, err := claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
 		if err != nil {
 			program.Send(fatalMsg{err: err})
 			return
@@ -188,7 +202,7 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 	reader := bufio.NewReaderSize(transcript, 1024*1024)
 	var partialLine []byte
 	unsentEntries := []claudecode.DialogueEntry{}
-	unsentQueueOperations := []claudecode.QueueOperation{}
+	unsentQueueOperations := []placedQueueOperation{}
 	turn := claudecode.CurrentTurn{}
 	turnChanged := false
 	linesRead := 0
@@ -199,7 +213,7 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 			if len(unsentEntries) > 0 || len(unsentQueueOperations) > 0 || turnChanged {
 				send(entriesReadMsg{entries: unsentEntries, queueOperations: unsentQueueOperations, turn: turn})
 				unsentEntries = []claudecode.DialogueEntry{}
-				unsentQueueOperations = []claudecode.QueueOperation{}
+				unsentQueueOperations = []placedQueueOperation{}
 				turnChanged = false
 			}
 			time.Sleep(200 * time.Millisecond)
@@ -230,8 +244,8 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 			continue
 		}
 		for _, operation := range lineQueueOperations {
-			operation.EntriesBefore = len(unsentEntries)
-			unsentQueueOperations = append(unsentQueueOperations, operation)
+			unsentQueueOperations = append(unsentQueueOperations,
+				placedQueueOperation{QueueOperation: operation, entriesBefore: len(unsentEntries)})
 		}
 		unsentEntries = append(unsentEntries, lineEntries...)
 		turnChanged = turnChanged || lineTurn != turn
@@ -546,7 +560,7 @@ func (m zenModel) withSize(width int, height int) zenModel {
 }
 
 // withEntries keeps a view scrolled up on the rows it shows, by counting the new entries' rows under it.
-func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperations []claudecode.QueueOperation) zenModel {
+func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperations []placedQueueOperation) zenModel {
 	firstNew := len(m.entries)
 	m.entries = append(m.entries, entries...)
 	m.entryRows = append(m.entryRows, make([][]string, len(entries))...)
@@ -571,8 +585,8 @@ func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperation
 	}
 	nextOperation := 0
 	for index, entry := range entries {
-		for ; nextOperation < len(queueOperations) && queueOperations[nextOperation].EntriesBefore <= index; nextOperation++ {
-			m = m.withQueueOperation(queueOperations[nextOperation])
+		for ; nextOperation < len(queueOperations) && queueOperations[nextOperation].entriesBefore <= index; nextOperation++ {
+			m = m.withQueueOperation(queueOperations[nextOperation].QueueOperation)
 		}
 		if entry.Kind != claudecode.PromptEntry {
 			continue
@@ -582,7 +596,7 @@ func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperation
 		}
 	}
 	for _, operation := range queueOperations[nextOperation:] {
-		m = m.withQueueOperation(operation)
+		m = m.withQueueOperation(operation.QueueOperation)
 	}
 	return m.withVisibleRowsDrawn()
 }

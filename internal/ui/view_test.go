@@ -13,7 +13,7 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/herdr-zen/internal/claudecode"
+	"github.com/CLBRITTON2/herdr-zen/claudecode"
 )
 
 func TestLineNumberAt(t *testing.T) {
@@ -588,15 +588,15 @@ func TestQueuedPrompts(t *testing.T) {
 
 func enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"})
-	queued := model.withEntries(nil, []claudecode.QueueOperation{{Operation: "enqueue", Text: "second one"}})
+	queued := model.withEntries(nil, []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}}})
 	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " "+queuedNote+" ") {
 		t.Errorf("band row after the enqueue = %q, want it to end in the queued note", row)
 	}
 	if row := bandTextRow(queued, "first one"); strings.Contains(row, "queued") {
 		t.Errorf("band row of the other prompt = %q, want no queued note", row)
 	}
-	taken := queued.withEntries(nil, []claudecode.QueueOperation{
-		{Operation: "remove", Reason: "absorbed_mid_turn", Text: "second one"},
+	taken := queued.withEntries(nil, []placedQueueOperation{
+		{QueueOperation: claudecode.QueueOperation{Operation: "remove", Reason: "absorbed_mid_turn", Text: "second one"}},
 	})
 	if row := bandTextRow(taken, "second one"); row == "" || strings.Contains(row, "queued") {
 		t.Errorf("band row after the remove = %q, want the band without the queued note", row)
@@ -604,8 +604,10 @@ func enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt(t *testing.T) {
 }
 
 func dequeueClearsOldestMarkedBand(t *testing.T) {
-	model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []claudecode.QueueOperation{
-		{Operation: "enqueue", Text: "first one"}, {Operation: "enqueue", Text: "second one"}, {Operation: "dequeue"},
+	model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []placedQueueOperation{
+		{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "first one"}},
+		{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}},
+		{QueueOperation: claudecode.QueueOperation{Operation: "dequeue"}},
 	})
 	if row := bandTextRow(model, "first one"); strings.Contains(row, "queued") {
 		t.Errorf("oldest band row after the dequeue = %q, want no queued note", row)
@@ -623,8 +625,8 @@ func removeThatDropsPromptRemovesItsBand(t *testing.T) {
 	}
 	for _, removal := range cases {
 		t.Run(removal.Reason, func(t *testing.T) {
-			model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []claudecode.QueueOperation{
-				{Operation: "enqueue", Text: "second one"}, removal,
+			model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []placedQueueOperation{
+				{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}}, {QueueOperation: removal},
 			})
 			if row := bandTextRow(model, "second one"); row != "" {
 				t.Errorf("screen still shows the removed band: %q", row)
@@ -649,7 +651,9 @@ func queueOperationsApplyInTheirPlaceAmongEntries(t *testing.T) {
 		t.Run(testCase.name, func(t *testing.T) {
 			model := modelWithSentPrompts([]string{"again", "again"}).withEntries(
 				[]claudecode.DialogueEntry{{Kind: claudecode.PromptEntry, Text: "again"}},
-				[]claudecode.QueueOperation{{Operation: "enqueue", Text: "again", EntriesBefore: testCase.entriesBefore}})
+				[]placedQueueOperation{
+					{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "again"}, entriesBefore: testCase.entriesBefore},
+				})
 			want := []earlyPrompt{{text: "again", queued: testCase.wantQueued}}
 			if !reflect.DeepEqual(model.earlyPrompts, want) {
 				t.Errorf("earlyPrompts = %+v, want %+v", model.earlyPrompts, want)
@@ -668,14 +672,14 @@ func screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand(t *testing.T) {
 	scrolled, _ := sent.(zenModel).withKey(pressedKey(tea.KeyPgUp))
 	scrolledModel := scrolled.(zenModel)
 	before := scrolledModel.screen()
-	queued := scrolledModel.withEntries(nil, []claudecode.QueueOperation{{Operation: "enqueue", Text: prompt}})
+	queued := scrolledModel.withEntries(nil, []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: prompt}}})
 	if len(queued.earlyPromptRows()) == len(scrolledModel.earlyPromptRows()) {
 		t.Fatalf("the queued note left the band at %d rows, want it rewrapped", len(queued.earlyPromptRows()))
 	}
 	if after := queued.screen(); after != before {
 		t.Errorf("screen moved when the band was marked:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
-	taken := queued.withEntries(nil, []claudecode.QueueOperation{{Operation: "dequeue"}})
+	taken := queued.withEntries(nil, []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "dequeue"}}})
 	if after := taken.screen(); after != before {
 		t.Errorf("screen moved when the mark was cleared:\nbefore:\n%s\nafter:\n%s", before, after)
 	}
@@ -834,7 +838,7 @@ func followTranscriptSendsQueueOperationsInTheirPlaceAmongEntries(t *testing.T) 
 		t.Fatalf("write transcript: %v", err)
 	}
 	read := nextEntriesRead(t, followTranscriptMessages(t, path))
-	want := []claudecode.QueueOperation{{Operation: "enqueue", Text: "second", EntriesBefore: 1}}
+	want := []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second"}, entriesBefore: 1}}
 	if !reflect.DeepEqual(read.queueOperations, want) {
 		t.Errorf("queue operations = %+v, want %+v", read.queueOperations, want)
 	}

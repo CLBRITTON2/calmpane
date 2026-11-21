@@ -9,10 +9,10 @@ import (
 )
 
 func TestConversationSession(t *testing.T) {
-	t.Run("zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript", zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript)
+	t.Run("waitForTranscriptSendsSessionBeforeFirstPromptWritesTranscript", waitForTranscriptSendsSessionBeforeFirstPromptWritesTranscript)
 	t.Run("conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened", conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened)
-	t.Run("zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened",
-		zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened)
+	t.Run("waitForTranscriptOpensTranscriptAndSendsSessionOfBackgroundJobResumeOpened",
+		waitForTranscriptOpensTranscriptAndSendsSessionOfBackgroundJobResumeOpened)
 	t.Run("conversationSessionIDFailsNamingMissingJobStateFile", conversationSessionIDFailsNamingMissingJobStateFile)
 	t.Run("conversationSessionIDFailsWhenJobStateHasNoSessionID", conversationSessionIDFailsWhenJobStateHasNoSessionID)
 	t.Run("lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting", lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting)
@@ -21,15 +21,14 @@ func TestConversationSession(t *testing.T) {
 		conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob)
 }
 
-func zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript(t *testing.T) {
+func waitForTranscriptSendsSessionBeforeFirstPromptWritesTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
 	opened := make(chan *os.File, 1)
-	statusLinePaths := make(chan string, 1)
+	conversationSessionIDs := make(chan string, 1)
 	go func() {
-		transcript, err := WaitForTranscript(sessionID, statusLinePaths)
+		transcript, err := WaitForTranscript(sessionID, conversationSessionIDs)
 		if err != nil {
 			t.Error(err)
 		}
@@ -42,12 +41,12 @@ func zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript(t *testing.T) {
 	default:
 	}
 	select {
-	case statusLinePath := <-statusLinePaths:
-		if want := filepath.Join(home, "AppData", "Local", "windows-dev", "statusline", sessionID); statusLinePath != want {
-			t.Errorf("status line path = %s, want %s", statusLinePath, want)
+	case conversationSessionID := <-conversationSessionIDs:
+		if conversationSessionID != sessionID {
+			t.Errorf("conversation session = %s, want %s", conversationSessionID, sessionID)
 		}
 	default:
-		t.Error("no status line path a second into the wait")
+		t.Error("no conversation session a second into the wait")
 	}
 	projectDir := filepath.Join(home, ".claude", "projects", "C--work")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -114,17 +113,16 @@ func conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened(t *testing.T)
 
 const resumeOpenedJobLine = `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening \"second\", running in the background (26f6d8f1)</local-command-stdout>"}` + "\n"
 
-func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *testing.T) {
+func waitForTranscriptOpensTranscriptAndSendsSessionOfBackgroundJobResumeOpened(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
 	const jobSessionID = "26f6d8f1-0a40-4e74-a315-4e535d101fd3"
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
 	writeTestJobState(t, home, "26f6d8f1", `{"sessionId":"`+jobSessionID+`"}`)
 	writeTestTranscript(t, home, jobSessionID, "")
-	statusLinePaths := make(chan string, 1)
-	transcript, err := WaitForTranscript(viewerSessionID, statusLinePaths)
+	conversationSessionIDs := make(chan string, 1)
+	transcript, err := WaitForTranscript(viewerSessionID, conversationSessionIDs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -133,8 +131,8 @@ func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *tes
 	if transcript.Name() != wantTranscriptPath {
 		t.Errorf("opened %s, want %s", transcript.Name(), wantTranscriptPath)
 	}
-	if statusLinePath := <-statusLinePaths; filepath.Base(statusLinePath) != jobSessionID {
-		t.Errorf("status line path = %s, want one ending in %s", statusLinePath, jobSessionID)
+	if conversationSessionID := <-conversationSessionIDs; conversationSessionID != jobSessionID {
+		t.Errorf("conversation session = %s, want %s", conversationSessionID, jobSessionID)
 	}
 }
 
@@ -163,20 +161,20 @@ func conversationSessionIDFailsWhenJobStateHasNoSessionID(t *testing.T) {
 
 func lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting(t *testing.T) {
 	transcript := resumeOpenedJobLine + `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening`
-	got, err := LastOpenedBackgroundJob(strings.NewReader(transcript))
+	got, err := lastOpenedBackgroundJob(strings.NewReader(transcript))
 	if err != nil {
 		t.Fatal(err)
 	}
 	if got != "26f6d8f1" {
-		t.Errorf("LastOpenedBackgroundJob = %q, want 26f6d8f1", got)
+		t.Errorf("lastOpenedBackgroundJob = %q, want 26f6d8f1", got)
 	}
 }
 
 func lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry(t *testing.T) {
 	transcript := `{"type":"system","subtype":"local_command","content":"cut` + "\n"
-	_, err := LastOpenedBackgroundJob(strings.NewReader(transcript))
+	_, err := lastOpenedBackgroundJob(strings.NewReader(transcript))
 	if err == nil || !strings.Contains(err.Error(), "decode local command entry") {
-		t.Fatalf("LastOpenedBackgroundJob error = %v, want one naming the undecodable entry", err)
+		t.Fatalf("lastOpenedBackgroundJob error = %v, want one naming the undecodable entry", err)
 	}
 }
 
