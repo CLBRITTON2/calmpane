@@ -32,6 +32,18 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 			want: []DialogueEntry{{Kind: PromptEntry, Text: "build log line\n\nwhy did it fail"}},
 		},
 		{
+			name: "pasted_content of more than two line breaks kept as a paste",
+			line: `{"type":"user","message":{"role":"user","content":` +
+				`"<pasted_content id=\"a1b2\">\nl1\nl2\nl3\nl4\n</pasted_content id=\"a1b2\">\n\nwhy did it fail"}}`,
+			want: []DialogueEntry{{Kind: PromptEntry, Text: "l1\nl2\nl3\nl4\n\nwhy did it fail", Pastes: []string{"l1\nl2\nl3\nl4"}}},
+		},
+		{
+			name: "compact summary shown as one entry without its text",
+			line: `{"type":"user","isVisibleInTranscriptOnly":true,"isCompactSummary":true,"message":{"role":"user",` +
+				`"content":"This session is being continued from a previous conversation."}}`,
+			want: []DialogueEntry{{Kind: CompactSummaryEntry}},
+		},
+		{
 			name: "user tool_result hidden",
 			line: `{"type":"user","message":{"role":"user","content":[{"type":"tool_result","tool_use_id":"t1","content":"ok"}]}}`,
 		},

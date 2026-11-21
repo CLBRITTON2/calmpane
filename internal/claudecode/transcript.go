@@ -18,13 +18,17 @@ const (
 	PromptEntry EntryKind = iota
 	ReplyEntry
 	QuestionEntry
+	// CompactSummaryEntry stands for the summary Claude Code writes as a user record when it compacts the session.
+	CompactSummaryEntry
 )
 
-// A QuestionEntry holds the question in Text and its option labels in Options.
+// A QuestionEntry holds the question in Text and its option labels in Options. A PromptEntry holds in Pastes each
+// paste of its Text that Claude Code shows as a label.
 type DialogueEntry struct {
 	Kind    EntryKind
 	Text    string
 	Options []string
+	Pastes  []string
 }
 
 // Claude Code writes these as user records with string content, though the user did not type them.
@@ -36,11 +40,14 @@ var notPromptPrefixes = []string{
 // A tag's own line break goes with it, so the pasted text keeps only the blank lines it held.
 var pastedContentTag = regexp.MustCompile(`</?pasted_content[^>]*>\n?`)
 
+var pastedContent = regexp.MustCompile(`(?s)<pasted_content[^>]*>(.*?)</pasted_content[^>]*>`)
+
 type transcriptRecord struct {
-	Type      string    `json:"type"`
-	IsMeta    bool      `json:"isMeta"`
-	Timestamp time.Time `json:"timestamp"`
-	Message   struct {
+	Type             string    `json:"type"`
+	IsMeta           bool      `json:"isMeta"`
+	IsCompactSummary bool      `json:"isCompactSummary"`
+	Timestamp        time.Time `json:"timestamp"`
+	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
 	// Claude Code writes a prompt sent while it works as an attachment of type queued_command.
@@ -117,6 +124,9 @@ func DialogueEntries(line []byte) ([]DialogueEntry, error) {
 	}
 	switch record.Type {
 	case "user":
+		if record.IsCompactSummary {
+			return []DialogueEntry{{Kind: CompactSummaryEntry}}, nil
+		}
 		if record.IsMeta {
 			return nil, nil
 		}
@@ -147,7 +157,13 @@ func promptEntries(content json.RawMessage) ([]DialogueEntry, error) {
 			return nil, nil
 		}
 	}
-	return []DialogueEntry{{Kind: PromptEntry, Text: TypedText(prompt)}}, nil
+	var pastes []string
+	for _, match := range pastedContent.FindAllStringSubmatch(prompt, -1) {
+		if paste := NormalizedPaste(match[1]); IsShownAsLabel(paste) {
+			pastes = append(pastes, paste)
+		}
+	}
+	return []DialogueEntry{{Kind: PromptEntry, Text: TypedText(prompt), Pastes: pastes}}, nil
 }
 
 func TypedText(prompt string) string {

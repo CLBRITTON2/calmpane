@@ -1099,6 +1099,127 @@ func followTranscriptSendsTurnOfLineWithOnlyToolCall(t *testing.T) {
 	}
 }
 
+func TestPaste(t *testing.T) {
+	t.Run("longPasteShowsAsLabelAndEnterSendsWholeText", longPasteShowsAsLabelAndEnterSendsWholeText)
+	t.Run("ctrlEnterSendsWholeTextAndRefusalCarriesPastes", ctrlEnterSendsWholeTextAndRefusalCarriesPastes)
+	t.Run("shortPasteShowsAsItsText", shortPasteShowsAsItsText)
+	t.Run("failedSendPutsPastesBackAsLabelsNumberedInOrder", failedSendPutsPastesBackAsLabelsNumberedInOrder)
+	t.Run("transcriptPromptReplacingBandShowsBandsPastesAsLabels", transcriptPromptReplacingBandShowsBandsPastesAsLabels)
+	t.Run("zenViewSavesDraftWithPastesExpanded", zenViewSavesDraftWithPastesExpanded)
+	t.Run("screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand", screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand)
+}
+
+func screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand(t *testing.T) {
+	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
+	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
+	pasted, _ := scrolled.Update(tea.PasteMsg{Content: fourLinePaste})
+	sent, _ := pasted.(zenModel).withKey(pressedKey(tea.KeyEnter))
+	sentModel := sent.(zenModel)
+	before := sentModel.screen()
+	recorded := sentModel.withEntries([]claudecode.DialogueEntry{{Kind: claudecode.PromptEntry,
+		Text: "line one\nline two\nline three\nline four"}}, nil)
+	if after := recorded.screen(); after != before {
+		t.Errorf("screen moved when the transcript prompt replaced the pasted prompt's band:\nbefore:\n%s\nafter:\n%s",
+			before, after)
+	}
+	if newestRows := plainRows(recorded.entryRows[len(recorded.entryRows)-1]); !reflect.DeepEqual(newestRows,
+		[]string{"", " ▌ [Pasted text #1 +3 lines]"}) {
+		t.Errorf("rows of the recorded prompt = %q, want its paste's label", newestRows)
+	}
+}
+
+const fourLinePaste = "line one\r\nline two\r\nline three\r\nline four\r\n"
+
+func modelWithPaste(typed string, content string) zenModel {
+	model := modelWithTypedPrompt(typed)
+	model.input.CursorEnd()
+	pasted, _ := model.Update(tea.PasteMsg{Content: content})
+	return pasted.(zenModel)
+}
+
+func longPasteShowsAsLabelAndEnterSendsWholeText(t *testing.T) {
+	recorder := &claudeInputRecorder{}
+	model := modelWithPaste("look at ", fourLinePaste)
+	model.claude, model.claudePaneID = recorder, "3"
+	if value := model.input.Value(); value != "look at [Pasted text #1 +3 lines]" {
+		t.Fatalf("input after the paste = %q, want the paste's label", value)
+	}
+	sent, send := model.withKey(pressedKey(tea.KeyEnter))
+	send()
+	if want := []string{"prompt 3 look at line one\nline two\nline three\nline four"}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Errorf("sent %q, want %q", recorder.calls, want)
+	}
+	if row := bandTextRow(sent.(zenModel), "look at [Pasted text #1 +3 lines]"); row == "" {
+		t.Errorf("screen after Enter lacks the band with the paste's label:\n%s", ansi.Strip(sent.(zenModel).screen()))
+	}
+}
+
+func ctrlEnterSendsWholeTextAndRefusalCarriesPastes(t *testing.T) {
+	recorder := &claudeInputRecorder{promptErr: herdr.ErrAgentBlocked}
+	model := modelWithPaste("look at ", fourLinePaste)
+	model.claude, model.claudePaneID = recorder, "3"
+	_, send := model.withKey(tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModCtrl})
+	paste := "line one\nline two\nline three\nline four"
+	want := promptSentMsg{prompt: "look at " + paste, pastes: []string{paste}, err: herdr.ErrAgentBlocked}
+	if msg := send(); !reflect.DeepEqual(msg, want) {
+		t.Errorf("ctrl+enter's command returned %#v, want %#v", msg, want)
+	}
+	if wantCalls := []string{"prompt 3 look at " + paste}; !reflect.DeepEqual(recorder.calls, wantCalls) {
+		t.Errorf("sent %q, want %q", recorder.calls, wantCalls)
+	}
+}
+
+func shortPasteShowsAsItsText(t *testing.T) {
+	model := modelWithPaste("look at ", "line one\nline two")
+	if value := model.input.Value(); value != "look at line one\nline two" {
+		t.Errorf("input after the paste = %q, want the paste's text", value)
+	}
+}
+
+func failedSendPutsPastesBackAsLabelsNumberedInOrder(t *testing.T) {
+	model := modelWithPaste("look at ", fourLinePaste)
+	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
+	sentModel := sent.(zenModel)
+	pastedSince, _ := sentModel.Update(tea.PasteMsg{Content: "w\nx\ny\nz"})
+	refused, _ := pastedSince.Update(promptSentMsg{prompt: "look at line one\nline two\nline three\nline four",
+		pastes: []string{"line one\nline two\nline three\nline four"}, err: herdr.ErrAgentBlocked})
+	refusedModel := refused.(zenModel)
+	if want := "look at [Pasted text #1 +3 lines]\n[Pasted text #2 +3 lines]"; refusedModel.input.Value() != want {
+		t.Errorf("input after the refused send = %q, want %q", refusedModel.input.Value(), want)
+	}
+	if want := "look at line one\nline two\nline three\nline four\nw\nx\ny\nz"; refusedModel.InputText() != want {
+		t.Errorf("text Enter would send = %q, want %q", refusedModel.InputText(), want)
+	}
+}
+
+func transcriptPromptReplacingBandShowsBandsPastesAsLabels(t *testing.T) {
+	sent, _ := modelWithPaste("look at ", fourLinePaste).withKey(pressedKey(tea.KeyEnter))
+	// herdr sends the whole prompt as one paste, so Claude Code wraps all of it in one tag.
+	text := "look at line one\nline two\nline three\nline four"
+	recorded := sent.(zenModel).withEntries([]claudecode.DialogueEntry{
+		{Kind: claudecode.PromptEntry, Text: text, Pastes: []string{text}}}, nil)
+	screenText := ansi.Strip(recorded.screen())
+	if !strings.Contains(screenText, "▌ look at [Pasted text #1 +3 lines]") || strings.Contains(screenText, "line two") {
+		t.Errorf("screen after the transcript records the prompt lacks its paste's label or shows the paste:\n%s",
+			screenText)
+	}
+}
+
+func zenViewSavesDraftWithPastesExpanded(t *testing.T) {
+	draftFile := filepath.Join(t.TempDir(), "draft")
+	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
+		input: NewPromptInput()}, draftFile: draftFile, savedDraft: ""}
+	view, _ = view.Update(tea.PasteMsg{Content: fourLinePaste})
+	draft, err := os.ReadFile(draftFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "line one\nline two\nline three\nline four"; string(draft) != want {
+		t.Errorf("draft = %q, want %q", draft, want)
+	}
+}
+
 func TestDraftSavingView(t *testing.T) {
 	t.Run("zenViewSavesUnsentTextAsDraftOfItsClaudePane", zenViewSavesUnsentTextAsDraftOfItsClaudePane)
 }

@@ -19,6 +19,32 @@ func TestEntryRows(t *testing.T) {
 	t.Run("replyRowsDrawInlineCodeWithoutBackground", replyRowsDrawInlineCodeWithoutBackground)
 	t.Run("questionRowsNumberOptionsFromOne", questionRowsNumberOptionsFromOne)
 	t.Run("replyRowsIndentTabIndentedCodeWithSpaces", replyRowsIndentTabIndentedCodeWithSpaces)
+	t.Run("promptRowsShowEachPasteAsItsLabel", promptRowsShowEachPasteAsItsLabel)
+	t.Run("compactSummaryIsOneRow", compactSummaryIsOneRow)
+}
+
+func promptRowsShowEachPasteAsItsLabel(t *testing.T) {
+	entry := claudecode.DialogueEntry{Kind: claudecode.PromptEntry, Text: "l1\nl2\nl3\nl4\n\nwhy did it fail",
+		Pastes: []string{"l1\nl2\nl3\nl4"}}
+	rows, err := EntryRows(entry, -1, 60, nil)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	want := []string{"", " ▌ [Pasted text #1 +3 lines]", " ▌", " ▌ why did it fail"}
+	if got := plainRows(rows); !reflect.DeepEqual(got, want) {
+		t.Errorf("prompt rows = %q, want %q", got, want)
+	}
+}
+
+func compactSummaryIsOneRow(t *testing.T) {
+	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.CompactSummaryEntry}, -1, 60, nil)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	want := []string{"", " Conversation compacted"}
+	if got := plainRows(rows); !reflect.DeepEqual(got, want) {
+		t.Errorf("compact summary rows = %q, want %q", got, want)
+	}
 }
 
 func promptBandRowsFillWidthWhenPromptWraps(t *testing.T) {

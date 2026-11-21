@@ -64,6 +64,7 @@ type fatalMsg struct {
 
 type promptSentMsg struct {
 	prompt string
+	pastes []string
 	err    error
 }
 
@@ -82,6 +83,7 @@ type agentInputTakenMsg struct {
 
 type earlyPrompt struct {
 	text   string
+	pastes []string
 	queued bool
 }
 
@@ -114,8 +116,10 @@ type zenModel struct {
 	newestCodeBlock *codeBlockPosition
 	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
 	// entries until a prompt entry with the same text arrives.
-	earlyPrompts     []earlyPrompt
-	input            textarea.Model
+	earlyPrompts []earlyPrompt
+	input        textarea.Model
+	// pastes holds each paste the input shows as a label, numbered from 1 in order, until the input is sent.
+	pastes           []string
 	claudeStatusLine string
 }
 
@@ -382,13 +386,15 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if msg.err == nil {
 			return m, nil
 		}
-		return m.withPromptPutBack(msg.prompt), nil
+		return m.withPromptPutBack(msg.prompt, msg.pastes), nil
 	case tea.KeyPressMsg:
 		if m.fatal != nil {
 			return m, tea.Quit
 		}
 		m.copyStatus = ""
 		return m.withKey(msg)
+	case tea.PasteMsg:
+		return m.withPasteInserted(msg.Content)
 	}
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
@@ -424,16 +430,18 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		m.copyStatus = workingStyle.Render("Copied the last code block.")
 		return m, tea.SetClipboard(replyBlocks[m.newestCodeBlock.block].code)
 	case "enter":
-		prompt := m.input.Value()
+		prompt := m.InputText()
 		if prompt == "" {
 			return m, nil
 		}
+		pastes := m.pastes
 		sendPrompt := func() tea.Msg {
-			return promptSentMsg{prompt: prompt, err: m.claude.PromptAgent(m.claudePaneID, prompt)}
+			return promptSentMsg{prompt: prompt, pastes: pastes, err: m.claude.PromptAgent(m.claudePaneID, prompt)}
 		}
 		return m.withInputSent(prompt), sendPrompt
 	case "ctrl+enter":
-		prompt := m.input.Value()
+		prompt := m.InputText()
+		pastes := m.pastes
 		if prompt == "" {
 			return m, func() tea.Msg {
 				return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
@@ -442,7 +450,7 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		// herdr returns from agent prompt once it has written the prompt and its Enter, so the keys reach Claude after them.
 		sendPromptAndSendNow := func() tea.Msg {
 			if err := m.claude.PromptAgent(m.claudePaneID, prompt); err != nil {
-				return promptSentMsg{prompt: prompt, err: err}
+				return promptSentMsg{prompt: prompt, pastes: pastes, err: err}
 			}
 			return claudeKeysSentMsg{err: m.claude.SendKeys(m.claudePaneID, sendNowKeys)}
 		}
@@ -463,13 +471,31 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	return m.withVisibleRowsDrawn(), inputCmd
 }
 
-func (m zenModel) withPromptPutBack(prompt string) zenModel {
+// withPromptPutBack shows the prompt's pastes and those typed since as labels again, renumbered in order.
+func (m zenModel) withPromptPutBack(prompt string, pastes []string) zenModel {
 	restored := prompt
-	if typedSince := m.input.Value(); typedSince != "" {
+	if typedSince := m.InputText(); typedSince != "" {
 		restored += "\n" + typedSince
 	}
-	m.input.SetValue(restored)
+	m.pastes = append(slices.Clone(pastes), m.pastes...)
+	m.input.SetValue(claudecode.TextWithPastesCollapsed(restored, m.pastes))
 	return m.withEarlyPromptRemoved(strings.TrimSpace(prompt))
+}
+
+func (m zenModel) InputText() string {
+	return claudecode.TextWithPastesExpanded(m.input.Value(), m.pastes)
+}
+
+func (m zenModel) withPasteInserted(content string) (zenModel, tea.Cmd) {
+	paste := claudecode.NormalizedPaste(content)
+	if !claudecode.IsShownAsLabel(paste) {
+		var inputCmd tea.Cmd
+		m.input, inputCmd = m.input.Update(tea.PasteMsg{Content: content})
+		return m.withVisibleRowsDrawn(), inputCmd
+	}
+	m.pastes = append(slices.Clone(m.pastes), paste)
+	m.input.InsertString(claudecode.PasteLabel(len(m.pastes), paste))
+	return m.withVisibleRowsDrawn(), nil
 }
 
 // Claude's own view drops a prompt an Esc cancelled before the reply.
@@ -477,7 +503,7 @@ func (m zenModel) withCancelledPromptRestored(prompt string) zenModel {
 	if prompt == "" {
 		return m
 	}
-	m = m.withPromptPutBack(prompt)
+	m = m.withPromptPutBack(prompt, nil)
 	newest := len(m.entries) - 1
 	newestIsCancelledPrompt := newest >= 0 && m.entries[newest].Kind == claudecode.PromptEntry &&
 		strings.TrimSpace(m.entries[newest].Text) == strings.TrimSpace(prompt)
@@ -493,6 +519,8 @@ func (m zenModel) withCancelledPromptRestored(prompt string) zenModel {
 }
 
 func (m zenModel) withInputSent(prompt string) zenModel {
+	pastes := m.pastes
+	m.pastes = nil
 	m.input.Reset()
 	m = m.withVisibleRowsDrawn()
 	// Claude records a slash command as a hidden <command-name> record, which would never replace the band.
@@ -500,7 +528,7 @@ func (m zenModel) withInputSent(prompt string) zenModel {
 	if bandText == "" || strings.HasPrefix(bandText, "/") {
 		return m
 	}
-	return m.withEarlyPromptAdded(bandText)
+	return m.withEarlyPromptAdded(earlyPrompt{text: bandText, pastes: pastes})
 }
 
 // withSize redraws every entry when the width changes, since prompts and markdown wrap to it.
@@ -550,14 +578,33 @@ func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperation
 		for ; nextOperation < len(queueOperations) && queueOperations[nextOperation].EntriesBefore <= index; nextOperation++ {
 			m = m.withQueueOperation(queueOperations[nextOperation])
 		}
-		if entry.Kind == claudecode.PromptEntry {
-			m = m.withEarlyPromptRemoved(entry.Text)
+		if entry.Kind != claudecode.PromptEntry {
+			continue
+		}
+		if bandIndex := m.earlyPromptIndex(entry.Text); bandIndex >= 0 {
+			m = m.withEntryPastes(firstNew+index, m.earlyPrompts[bandIndex].pastes).withEarlyPromptRemovedAt(bandIndex)
 		}
 	}
 	for _, operation := range queueOperations[nextOperation:] {
 		m = m.withQueueOperation(operation)
 	}
 	return m.withVisibleRowsDrawn()
+}
+
+// withEntryPastes gives a prompt entry the pastes of the early band it replaces, since herdr sends a zen prompt as one
+// paste, which Claude Code wraps whole in a pasted_content tag.
+func (m zenModel) withEntryPastes(index int, pastes []string) zenModel {
+	formerRows := m.entryRows[index]
+	m.entries[index].Pastes = pastes
+	if formerRows == nil {
+		return m
+	}
+	m.entryRows[index] = nil
+	m = m.withEntryDrawn(index)
+	if m.rowsBelowView > 0 {
+		m.rowsBelowView = max(m.rowsBelowView+len(m.entryRows[index])-len(formerRows), 0)
+	}
+	return m
 }
 
 func (m zenModel) withQueueOperation(operation claudecode.QueueOperation) zenModel {
@@ -582,15 +629,17 @@ func (m zenModel) withQueueOperation(operation claudecode.QueueOperation) zenMod
 	return m
 }
 
-func (m zenModel) withEarlyPromptAdded(prompt string) zenModel {
-	return m.withEarlyPrompts(append(slices.Clone(m.earlyPrompts), earlyPrompt{text: prompt}))
+func (m zenModel) withEarlyPromptAdded(early earlyPrompt) zenModel {
+	return m.withEarlyPrompts(append(slices.Clone(m.earlyPrompts), early))
 }
 
 // withEarlyPromptRemoved removes the oldest early band with the prompt's text, if there is one.
 func (m zenModel) withEarlyPromptRemoved(prompt string) zenModel {
-	return m.withEarlyPromptRemovedAt(slices.IndexFunc(m.earlyPrompts, func(early earlyPrompt) bool {
-		return early.text == prompt
-	}))
+	return m.withEarlyPromptRemovedAt(m.earlyPromptIndex(prompt))
+}
+
+func (m zenModel) earlyPromptIndex(prompt string) int {
+	return slices.IndexFunc(m.earlyPrompts, func(early earlyPrompt) bool { return early.text == prompt })
 }
 
 func (m zenModel) withEarlyPromptRemovedAt(index int) zenModel {
@@ -635,7 +684,7 @@ func (m zenModel) earlyPromptRows() []string {
 		if early.queued {
 			note = queuedNote
 		}
-		rows = append(rows, PromptEntryRows(early.text, note, m.width)...)
+		rows = append(rows, PromptEntryRows(claudecode.TextWithPastesCollapsed(early.text, early.pastes), note, m.width)...)
 	}
 	return rows
 }
@@ -772,7 +821,7 @@ func (v draftSavingView) View() tea.View {
 func (v draftSavingView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := v.zen.Update(msg)
 	v.zen = updated.(zenModel)
-	draft := v.zen.input.Value()
+	draft := v.zen.InputText()
 	if draft == v.savedDraft {
 		return v, cmd
 	}

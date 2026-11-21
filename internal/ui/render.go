@@ -43,6 +43,9 @@ const bandMarker = "▌ "
 
 const queuedNote = "queued · ctrl+enter to send now"
 
+// compactSummaryRow is what Claude Code shows in place of the summary it writes when it compacts the session.
+const compactSummaryRow = "Conversation compacted"
+
 // replyStyle is glamour's dark style in the colors above, with no background on reply text, no # before headings and
 // no blank lines around the document.
 var replyStyle = func() ansi.StyleConfig {
@@ -79,7 +82,7 @@ func EntryRows(entry claudecode.DialogueEntry, copyHintBlock int, width int, rep
 	var blockRows []string
 	switch entry.Kind {
 	case claudecode.PromptEntry:
-		return PromptEntryRows(entry.Text, "", width), nil
+		return PromptEntryRows(claudecode.TextWithPastesCollapsed(entry.Text, entry.Pastes), "", width), nil
 	case claudecode.ReplyEntry:
 		replyRows, err := ReplyRows(entry.Text, copyHintBlock, width, replyRenderer)
 		if err != nil {
@@ -92,6 +95,8 @@ func EntryRows(entry claudecode.DialogueEntry, copyHintBlock int, width int, rep
 			lines = append(lines, optionStyle.Width(max(width-2, 1)).Render(fmt.Sprintf("  %d. %s", number+1, label)))
 		}
 		blockRows = strings.Split(strings.Join(lines, "\n"), "\n")
+	case claudecode.CompactSummaryEntry:
+		blockRows = []string{workingStyle.Render(compactSummaryRow)}
 	}
 	rows := []string{""}
 	for _, row := range blockRows {
