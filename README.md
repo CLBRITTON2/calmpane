@@ -5,8 +5,8 @@ questions, without tool calls, tool results or thinking. It opens zoomed over th
 prompts from it.
 
 > [!NOTE]
-> Zen only hides the clutter to make Claude's replies easier to read. It does not replace watching what the agent
-> does: always stay aware of the commands it runs and the files it changes, in the Claude pane itself (alt+x).
+> Zen only hides the clutter to make Claude's replies easier to read. You should always be aware of what commands an
+> LLM is running and what files it is editing, by whatever means fit your workflow.
 
 ## Install
 
@@ -23,8 +23,6 @@ From a clone, `make` installs it and `make test` vets and tests it.
 
 | Key          | Action                                                            |
 |--------------|-------------------------------------------------------------------|
-| alt+x        | Turn zen mode on or off                                           |
-| alt+1..9     | Focus an agent, showing its zen view while zen mode is on         |
 | enter        | Send the prompt                                                   |
 | shift+enter  | New line                                                          |
 | ctrl+enter   | Send the prompt now, even while Claude works                      |
