@@ -18,8 +18,10 @@ type claudeStatusLineMsg struct {
 	line string
 }
 
-// statusline.ps1 rewrites the file in place, so content not ending in a newline is a write in progress.
-func followClaudeStatusLine(path string, interval time.Duration, send func(tea.Msg)) {
+// followClaudeStatusLine follows the latest path from paths, starting once the first arrives. statusline.ps1 rewrites
+// the file in place, so content not ending in a newline is a write in progress.
+func followClaudeStatusLine(paths <-chan string, interval time.Duration, send func(tea.Msg)) {
+	path := <-paths
 	sentLine := ""
 	for {
 		content, err := os.ReadFile(path)
@@ -38,6 +40,9 @@ func followClaudeStatusLine(path string, interval time.Duration, send func(tea.M
 				send(claudeStatusLineMsg{line: sentLine})
 			}
 		}
-		time.Sleep(interval)
+		select {
+		case path = <-paths:
+		case <-time.After(interval):
+		}
 	}
 }

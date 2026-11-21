@@ -152,13 +152,14 @@ func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, s
 			program.Send(fatalMsg{err: err})
 			return
 		}
-		transcript, statusLinePath, err := claudecode.WaitForTranscriptAndStatusLinePath(sessionID)
+		statusLinePaths := make(chan string)
+		go followClaudeStatusLine(statusLinePaths, 300*time.Millisecond, program.Send)
+		transcript, err := claudecode.WaitForTranscript(sessionID, statusLinePaths)
 		if err != nil {
 			program.Send(fatalMsg{err: err})
 			return
 		}
 		go pollAgentStatus(agent, program.Send)
-		go followClaudeStatusLine(statusLinePath, 300*time.Millisecond, program.Send)
 		err = followTranscript(transcript, program.Send)
 		program.Send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err),
 			transcript.Close())})

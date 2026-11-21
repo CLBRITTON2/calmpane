@@ -23,6 +23,11 @@ var backgroundJobLine = regexp.MustCompile(`running in the background \(([0-9a-f
 // holds no conversation, while the background session's job writes the conversation under the job's session.
 func ConversationSessionID(reportedSessionID string) (string, error) {
 	transcript, err := openTranscript(reportedSessionID)
+	// Claude writes the transcript at the first prompt or /resume, so a Claude without one has opened no background
+	// session yet
+	if errors.Is(err, fs.ErrNotExist) {
+		return reportedSessionID, nil
+	}
 	if err != nil {
 		return "", err
 	}
@@ -40,7 +45,6 @@ func ConversationSessionID(reportedSessionID string) (string, error) {
 	statePath := filepath.Join(home, ".claude", "jobs", jobID, "state.json")
 	stateJSON, err := os.ReadFile(statePath)
 	if err != nil {
-		// %v, not %w: a missing state.json must show, not match fs.ErrNotExist, which the zen view waits out
 		return "", fmt.Errorf("Cannot read %s: %v", statePath, err)
 	}
 	var state struct {
@@ -103,32 +107,29 @@ func openTranscript(sessionID string) (*os.File, error) {
 	return transcript, nil
 }
 
-// WaitForTranscriptAndStatusLinePath waits for a Claude that just started, which writes the transcript of
-// reportedSessionID at the first prompt.
-func WaitForTranscriptAndStatusLinePath(reportedSessionID string) (*os.File, string, error) {
+// WaitForTranscript waits for a Claude that just started, which writes the transcript of reportedSessionID at the
+// first prompt. Claude writes its status line before that, so the status line path of each conversation session found
+// while waiting goes to statusLinePaths at once.
+func WaitForTranscript(reportedSessionID string, statusLinePaths chan<- string) (*os.File, error) {
+	localAppData, err := os.UserCacheDir()
+	if err != nil {
+		return nil, fmt.Errorf("find the local app data directory: %w", err)
+	}
+	sentSessionID := ""
 	for {
-		transcript, statusLinePath, err := openClaudeTranscriptAndStatusLinePath(reportedSessionID)
+		sessionID, err := ConversationSessionID(reportedSessionID)
+		if err != nil {
+			return nil, err
+		}
+		if sessionID != sentSessionID {
+			// windows-dev's claude/statusline.ps1 writes it
+			statusLinePaths <- filepath.Join(localAppData, "windows-dev", "statusline", sessionID)
+			sentSessionID = sessionID
+		}
+		transcript, err := openTranscript(sessionID)
 		if !errors.Is(err, fs.ErrNotExist) {
-			return transcript, statusLinePath, err
+			return transcript, err
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
-}
-
-func openClaudeTranscriptAndStatusLinePath(reportedSessionID string) (*os.File, string, error) {
-	sessionID, err := ConversationSessionID(reportedSessionID)
-	if err != nil {
-		return nil, "", err
-	}
-	transcript, err := openTranscript(sessionID)
-	if err != nil {
-		return nil, "", err
-	}
-	localAppData, err := os.UserCacheDir()
-	if err != nil {
-		return nil, "", errors.Join(fmt.Errorf("find the local app data directory: %w", err), transcript.Close())
-	}
-	// windows-dev's claude/statusline.ps1 writes it
-	statusLinePath := filepath.Join(localAppData, "windows-dev", "statusline", sessionID)
-	return transcript, statusLinePath, nil
 }

@@ -121,12 +121,35 @@ func writeStatusLineFile(t *testing.T, path string, content string) {
 func TestFollowClaudeStatusLine(t *testing.T) {
 	t.Run("followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes", followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes)
 	t.Run("followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt", followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt)
+	t.Run("followClaudeStatusLineFollowsNewestPathSent", followClaudeStatusLineFollowsNewestPathSent)
+}
+
+func followClaudeStatusLineFollowsNewestPathSent(t *testing.T) {
+	directory := t.TempDir()
+	viewerPath := filepath.Join(directory, "viewer-session-id")
+	jobPath := filepath.Join(directory, "job-session-id")
+	writeStatusLineFile(t, viewerPath, "viewer\n")
+	writeStatusLineFile(t, jobPath, "job\n")
+	messages := make(chan tea.Msg, 16)
+	// buffered, so a follower that stopped taking paths fails the test instead of hanging it
+	paths := make(chan string, 1)
+	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	paths <- viewerPath
+	if line := nextClaudeStatusLine(t, messages); line != "viewer" {
+		t.Errorf("line = %q, want %q", line, "viewer")
+	}
+	paths <- jobPath
+	if line := nextClaudeStatusLine(t, messages); line != "job" {
+		t.Errorf("line after the job's path = %q, want %q", line, "job")
+	}
 }
 
 func followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "session-id")
 	messages := make(chan tea.Msg, 16)
-	go followClaudeStatusLine(path, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	paths := make(chan string)
+	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	paths <- path
 	writeStatusLineFile(t, path, roseLocation+"\n")
 	if line := nextClaudeStatusLine(t, messages); line != roseLocation {
 		t.Errorf("line = %q, want %q", line, roseLocation)
@@ -149,7 +172,9 @@ func followClaudeStatusLineSendsEachWholeLineAndNoneWhenFileGoes(t *testing.T) {
 func followClaudeStatusLineReportsUnreadableFileAsProblemNamingIt(t *testing.T) {
 	path := t.TempDir()
 	messages := make(chan tea.Msg, 16)
-	go followClaudeStatusLine(path, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	paths := make(chan string)
+	go followClaudeStatusLine(paths, 10*time.Millisecond, func(msg tea.Msg) { messages <- msg })
+	paths <- path
 	select {
 	case msg := <-messages:
 		problem, isProblem := msg.(problemMsg)

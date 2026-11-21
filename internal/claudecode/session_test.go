@@ -1,8 +1,6 @@
 package claudecode
 
 import (
-	"errors"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -11,11 +9,11 @@ import (
 )
 
 func TestConversationSession(t *testing.T) {
-	t.Run("zenViewWaitsForFirstPromptBeforeOpeningTranscript", zenViewWaitsForFirstPromptBeforeOpeningTranscript)
+	t.Run("zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript", zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript)
 	t.Run("conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened", conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened)
 	t.Run("zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened",
 		zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened)
-	t.Run("conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile", conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile)
+	t.Run("conversationSessionIDFailsNamingMissingJobStateFile", conversationSessionIDFailsNamingMissingJobStateFile)
 	t.Run("conversationSessionIDFailsWhenJobStateHasNoSessionID", conversationSessionIDFailsWhenJobStateHasNoSessionID)
 	t.Run("lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting", lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting)
 	t.Run("lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry", lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry)
@@ -23,13 +21,15 @@ func TestConversationSession(t *testing.T) {
 		conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob)
 }
 
-func zenViewWaitsForFirstPromptBeforeOpeningTranscript(t *testing.T) {
+func zenViewFollowsStatusLineBeforeFirstPromptOpensTranscript(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
+	t.Setenv("LOCALAPPDATA", filepath.Join(home, "AppData", "Local"))
 	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
 	opened := make(chan *os.File, 1)
+	statusLinePaths := make(chan string, 1)
 	go func() {
-		transcript, _, err := WaitForTranscriptAndStatusLinePath(sessionID)
+		transcript, err := WaitForTranscript(sessionID, statusLinePaths)
 		if err != nil {
 			t.Error(err)
 		}
@@ -40,6 +40,14 @@ func zenViewWaitsForFirstPromptBeforeOpeningTranscript(t *testing.T) {
 	case <-opened:
 		t.Fatal("opened before Claude wrote the transcript")
 	default:
+	}
+	select {
+	case statusLinePath := <-statusLinePaths:
+		if want := filepath.Join(home, "AppData", "Local", "windows-dev", "statusline", sessionID); statusLinePath != want {
+			t.Errorf("status line path = %s, want %s", statusLinePath, want)
+		}
+	default:
+		t.Error("no status line path a second into the wait")
 	}
 	projectDir := filepath.Join(home, ".claude", "projects", "C--work")
 	if err := os.MkdirAll(projectDir, 0o755); err != nil {
@@ -115,7 +123,8 @@ func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *tes
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
 	writeTestJobState(t, home, "26f6d8f1", `{"sessionId":"`+jobSessionID+`"}`)
 	writeTestTranscript(t, home, jobSessionID, "")
-	transcript, statusLinePath, err := WaitForTranscriptAndStatusLinePath(viewerSessionID)
+	statusLinePaths := make(chan string, 1)
+	transcript, err := WaitForTranscript(viewerSessionID, statusLinePaths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -124,12 +133,12 @@ func zenViewFollowsTranscriptAndStatusLineOfBackgroundSessionResumeOpened(t *tes
 	if transcript.Name() != wantTranscriptPath {
 		t.Errorf("opened %s, want %s", transcript.Name(), wantTranscriptPath)
 	}
-	if filepath.Base(statusLinePath) != jobSessionID {
+	if statusLinePath := <-statusLinePaths; filepath.Base(statusLinePath) != jobSessionID {
 		t.Errorf("status line path = %s, want one ending in %s", statusLinePath, jobSessionID)
 	}
 }
 
-func conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile(t *testing.T) {
+func conversationSessionIDFailsNamingMissingJobStateFile(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
@@ -137,9 +146,6 @@ func conversationSessionIDFailsWithoutWaitingWhenJobHasNoStateFile(t *testing.T)
 	_, err := ConversationSessionID(viewerSessionID)
 	if err == nil || !strings.Contains(err.Error(), filepath.Join("jobs", "26f6d8f1", "state.json")) {
 		t.Fatalf("ConversationSessionID error = %v, want one naming the job's state.json", err)
-	}
-	if errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("ConversationSessionID error %v matches fs.ErrNotExist, which the zen view waits out", err)
 	}
 }
 
