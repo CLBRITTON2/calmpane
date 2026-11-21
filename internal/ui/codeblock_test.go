@@ -14,6 +14,24 @@ func TestCodeBlocks(t *testing.T) {
 	t.Run("topRuleDropsHintThenLanguageWhenTooNarrow", topRuleDropsHintThenLanguageWhenTooNarrow)
 	t.Run("replyRowsKeepTextAroundCodeBlock", replyRowsKeepTextAroundCodeBlock)
 	t.Run("codeBlocksHoldCodeExactlyAsInReply", codeBlocksHoldCodeExactlyAsInReply)
+	t.Run("codeFrameRowsDrawCommentInBoldIris", codeFrameRowsDrawCommentInBoldIris)
+}
+
+func codeFrameRowsDrawCommentInBoldIris(t *testing.T) {
+	block := codeBlock{code: "# 1. Restart zen so it draws the new colors.\ngit status", language: "powershell"}
+	rows, err := CodeFrameRows(block, "", 80)
+	if err != nil {
+		t.Fatalf("CodeFrameRows: %v", err)
+	}
+	// bold, and iris #c4a7e7 as a 24-bit foreground
+	boldIris := "\x1b[1m\x1b[38;2;196;167;231m"
+	commentRow, commandRow := rows[1], rows[2]
+	if !strings.Contains(commentRow, boldIris) {
+		t.Errorf("comment row = %q, want it in bold iris %q", commentRow, boldIris)
+	}
+	if strings.Contains(commandRow, "38;2;196;167;231") {
+		t.Errorf("command row = %q, want it in another color than the comment's iris", commandRow)
+	}
 }
 
 func replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t *testing.T) {
@@ -131,6 +149,8 @@ func replyRowsKeepTextAroundCodeBlock(t *testing.T) {
 				"│ done"}},
 		{name: "prose that spells the placeholder", reply: "The row ZENCODEBLOCK0 stays text.\n\n```\necho one\n```",
 			want: []string{"The row ZENCODEBLOCK0 stays text.", "", plainTopRule, "echo one", bottomRule}},
+		{name: "under a heading", reply: "Done.\n\n## Do This Now\n\n```\n# 1. Reopen zen.\n```",
+			want: []string{"Done.", "", "Do This Now", plainTopRule, "# 1. Reopen zen.", bottomRule}},
 	}
 	replyRenderer, err := NewReplyRenderer(60)
 	if err != nil {

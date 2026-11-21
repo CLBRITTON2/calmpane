@@ -8,7 +8,10 @@ import (
 
 	"charm.land/glamour/v2"
 	"charm.land/lipgloss/v2"
-	"github.com/alecthomas/chroma/v2/quick"
+	"github.com/alecthomas/chroma/v2"
+	"github.com/alecthomas/chroma/v2/formatters"
+	"github.com/alecthomas/chroma/v2/lexers"
+	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/x/ansi"
 	"github.com/yuin/goldmark"
 	"github.com/yuin/goldmark/ast"
@@ -26,7 +29,8 @@ type codeBlock struct {
 	start int
 	end   int
 	// prefix is what precedes the opening fence on its line: a list item's indentation or a quote's "> ".
-	prefix string
+	prefix       string
+	underHeading bool
 }
 
 // The extensions glamour's own parser uses, so a block is found where glamour would render one.
@@ -36,6 +40,16 @@ var (
 	frameRuleStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color(colorHighlightMed))
 	frameLabelStyle = lipgloss.NewStyle().Foreground(lipgloss.Color(colorMuted))
 )
+
+// codeStyle is chroma's rose-pine with comments in bold iris, the heading color, so the "# 1. ..." step lines of a
+// command block stand apart from the commands under them, instead of fading in rose-pine's muted gray.
+var codeStyle = func() *chroma.Style {
+	style, err := styles.Get("rose-pine").Builder().Add(chroma.Comment, "bold "+colorIris).Build()
+	if err != nil {
+		panic(fmt.Sprintf("build the code style from rose-pine: %v", err))
+	}
+	return style
+}()
 
 const codeIndent = "  "
 
@@ -70,12 +84,14 @@ func CodeBlocks(markdown string) ([]codeBlock, error) {
 			strings.Repeat(string(fence), 3)) {
 			end = lineEnd(markdown, end)
 		}
+		_, underHeading := fenced.PreviousSibling().(*ast.Heading)
 		blocks = append(blocks, codeBlock{
-			code:     strings.TrimSuffix(code.String(), "\n"),
-			language: string(fenced.Language(source)),
-			start:    openingStart,
-			end:      end,
-			prefix:   openingLine[:strings.IndexAny(openingLine, "`~")],
+			code:         strings.TrimSuffix(code.String(), "\n"),
+			language:     string(fenced.Language(source)),
+			start:        openingStart,
+			end:          end,
+			prefix:       openingLine[:strings.IndexAny(openingLine, "`~")],
+			underHeading: underHeading,
 		})
 		return ast.WalkSkipChildren, nil
 	})
@@ -172,6 +188,10 @@ func ReplyRows(reply string, copyHintBlock int, width int, replyRenderer *glamou
 		if HoldsReplyText(before) {
 			rows = append(rows, before)
 		}
+		// glamour leaves a blank row under a heading, which would set the heading apart from the block it labels
+		if blocks[index].underHeading && len(rows) > 0 && !HoldsReplyText(rows[len(rows)-1]) {
+			rows = rows[:len(rows)-1]
+		}
 		rows = append(rows, frameRows...)
 		if HoldsReplyText(after) {
 			rows = append(rows, after)
@@ -190,9 +210,20 @@ func HoldsReplyText(rowPart string) bool {
 // CodeFrameRows draws a highlighted code block between a top and a bottom rule width columns wide, with no side
 // borders, so a drag over the code selects no frame characters. A code line wider than the frame wraps.
 func CodeFrameRows(block codeBlock, copyHint string, width int) ([]string, error) {
+	code := strings.ReplaceAll(block.code, "\t", "    ")
+	lexer := lexers.Get(block.language)
+	if lexer == nil {
+		lexer = lexers.Analyse(code)
+	}
+	if lexer == nil {
+		lexer = lexers.Fallback
+	}
+	tokens, err := chroma.Coalesce(lexer).Tokenise(nil, code)
+	if err != nil {
+		return nil, fmt.Errorf("tokenise the %q code block %.80q: %w", block.language, block.code, err)
+	}
 	var highlighted strings.Builder
-	if err := quick.Highlight(&highlighted, strings.ReplaceAll(block.code, "\t", "    "), block.language,
-		"terminal16m", "rose-pine"); err != nil {
+	if err := formatters.TTY16m.Format(&highlighted, codeStyle, tokens); err != nil {
 		return nil, fmt.Errorf("highlight the %q code block %.80q: %w", block.language, block.code, err)
 	}
 	rows := []string{TopRule(block.language, copyHint, width)}
