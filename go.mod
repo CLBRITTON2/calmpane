@@ -4,13 +4,13 @@ go 1.27.3
 
 require (
 	charm.land/bubbles/v2 v2.2.1
-	charm.land/bubbletea/v2 v2.1.1
+	charm.land/bubbletea/v2 v2.1.2
 	charm.land/glamour/v2 v2.0.1
-	charm.land/lipgloss/v2 v2.0.6
+	charm.land/lipgloss/v2 v2.1.1
 	github.com/alecthomas/chroma/v2 v2.27.0
-	github.com/charmbracelet/x/ansi v0.11.9
-	github.com/yuin/goldmark v1.7.8
-	golang.org/x/sys v0.49.0
+	github.com/charmbracelet/x/ansi v0.11.10
+	github.com/yuin/goldmark v1.8.7
+	golang.org/x/sys v0.50.0
 )
 
 require (
