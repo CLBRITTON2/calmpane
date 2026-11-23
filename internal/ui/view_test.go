@@ -66,7 +66,9 @@ func followTranscriptNamesUndecodableLineAndKeepsReading(t *testing.T) {
 	})
 	messages := make(chan tea.Msg, 16)
 	go func() {
-		messages <- fatalMsg{err: followTranscript(transcript, func(msg tea.Msg) { messages <- msg })}
+		sameSession := func() (string, error) { return "session", nil }
+		_, err := followTranscript(transcript, "session", sameSession, func(msg tea.Msg) { messages <- msg })
+		messages <- fatalMsg{err: err}
 	}()
 	problemSeen, entriesSeen := false, false
 	for !problemSeen || !entriesSeen {
@@ -96,7 +98,7 @@ func followTranscriptNamesUndecodableLineAndKeepsReading(t *testing.T) {
 func TestPromptSend(t *testing.T) {
 	t.Run("enterClearsInputAtOnceAndFailedSendPutsWholeTextBack", enterClearsInputAtOnceAndFailedSendPutsWholeTextBack)
 	t.Run("enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace", enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace)
-	t.Run("enterGivesSlashCommandNoEarlyBand", enterGivesSlashCommandNoEarlyBand)
+	t.Run("enterGivesSlashCommandEarlyBandThatItsCommandEntryReplaces", enterGivesSlashCommandEarlyBandThatItsCommandEntryReplaces)
 	t.Run("failedSendRemovesEarlyBandAndShowsRefusal", failedSendRemovesEarlyBandAndShowsRefusal)
 	t.Run("shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines", shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines)
 	t.Run("ctrlEnterSendsPromptThenSendNowKeys", ctrlEnterSendsPromptThenSendNowKeys)
@@ -104,24 +106,28 @@ func TestPromptSend(t *testing.T) {
 
 func enterClearsInputAtOnceAndFailedSendPutsWholeTextBack(t *testing.T) {
 	cases := []struct {
-		name       string
-		err        error
-		typedSince string
-		wantInput  string
-		wantShown  string
+		name            string
+		claudeScreenKey string
+		err             error
+		typedSince      string
+		wantInput       string
+		wantShown       string
 	}{
-		{name: "refused while blocked", err: ErrAgentBlocked, wantInput: "keep me\nand this line",
-			wantShown: "Claude is waiting for you. Press alt+x to answer."},
-		{name: "herdr failed", err: errors.New("herdr agent prompt failed: exit status 1"),
+		{name: "refused while blocked", claudeScreenKey: "alt+x", err: ErrAgentBlocked,
+			wantInput: "keep me\nand this line", wantShown: "Claude is waiting for you. Press alt+x to answer."},
+		{name: "refused while blocked names configured key", claudeScreenKey: "alt+z", err: ErrAgentBlocked,
+			wantInput: "keep me\nand this line", wantShown: "Claude is waiting for you. Press alt+z to answer."},
+		{name: "herdr failed", claudeScreenKey: "alt+x", err: errors.New("herdr agent prompt failed: exit status 1"),
 			wantInput: "keep me\nand this line", wantShown: "herdr agent prompt failed: exit status 1"},
-		{name: "refused after more typing", err: ErrAgentBlocked, typedSince: "more",
+		{name: "refused after more typing", claudeScreenKey: "alt+x", err: ErrAgentBlocked, typedSince: "more",
 			wantInput: "keep me\nand this line\nmore", wantShown: "Claude is waiting for you. Press alt+x to answer."},
-		{name: "sent", err: nil, wantInput: "", wantShown: ""},
-		{name: "sent after more typing", err: nil, typedSince: "more", wantInput: "more", wantShown: ""},
+		{name: "sent", claudeScreenKey: "alt+x", err: nil, wantInput: "", wantShown: ""},
+		{name: "sent after more typing", claudeScreenKey: "alt+x", err: nil, typedSince: "more", wantInput: "more",
+			wantShown: ""},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+			model := newZenModel(nil, testAppearance, testCase.claudeScreenKey, "")
 			model.input.SetValue("keep me\nand this line")
 			sent, _ := model.withKey(pressedKey(tea.KeyEnter))
 			sentModel := sent.(zenModel)
@@ -162,12 +168,12 @@ func TestScrolling(t *testing.T) {
 	t.Run("screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest", screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest)
 	t.Run("upScrollsBackThreeRowsAndDownReturns", upScrollsBackThreeRowsAndDownReturns)
 	t.Run("screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes", screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes)
-	t.Run("screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand", screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand)
+	t.Run("screenScrolledUpStaysOnItsRowsWhenQueuedNoteRowComesAndGoes", screenScrolledUpStaysOnItsRowsWhenQueuedNoteRowComesAndGoes)
 	t.Run("screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped", screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped)
 }
 
 func screenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToNewest(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	if !strings.Contains(model.screen(), "prompt 20") {
 		t.Fatalf("screen at the bottom lacks the newest prompt:\n%s", model.screen())
@@ -189,7 +195,7 @@ func screenScrolledUpStaysOnItsRowsWhenEntriesArriveAndEndReturnsToNewest(t *tes
 }
 
 func screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 3), nil)
 	for range 4 {
 		scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
@@ -205,7 +211,7 @@ func screenScrolledPastOldestEntryStopsThereAndOnePgDnReturnsToNewest(t *testing
 }
 
 func upScrollsBackThreeRowsAndDownReturns(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolledUp, _ := model.Update(pressedKey(tea.KeyUp))
 	upModel := scrolledUp.(zenModel)
@@ -222,44 +228,97 @@ func upScrollsBackThreeRowsAndDownReturns(t *testing.T) {
 }
 
 func TestCopy(t *testing.T) {
-	t.Run("ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey", ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey)
+	t.Run("ctrlYOpensCopyModeOnNewestBlockAndEnterCopiesItAndShowsCopiedUntilNextKey",
+		ctrlYOpensCopyModeOnNewestBlockAndEnterCopiesItAndShowsCopiedUntilNextKey)
 	t.Run("ctrlYSaysSoAndCopiesNothingWithNoCodeBlock", ctrlYSaysSoAndCopiesNothingWithNoCodeBlock)
 	t.Run("newStatusReplacesCopyStatus", newStatusReplacesCopyStatus)
 	t.Run("copyHintMovesToNewestCodeBlockWhenReplyBringsOne", copyHintMovesToNewestCodeBlockWhenReplyBringsOne)
+	t.Run("upAndDownPickOlderAndNewerBlockAndStopAtOldestAndNewest", upAndDownPickOlderAndNewerBlockAndStopAtOldestAndNewest)
+	t.Run("spaceMarksPickedBlockAfterItsLanguageAndSpaceAgainUnmarksIt", spaceMarksPickedBlockAfterItsLanguageAndSpaceAgainUnmarksIt)
+	t.Run("enterCopiesMarkedBlocksOldestFirstJoinedByBlankLine", enterCopiesMarkedBlocksOldestFirstJoinedByBlankLine)
+	t.Run("escLeavesCopyModeCopyingNothingAndSendsNoInterruptWhileClaudeWorks",
+		escLeavesCopyModeCopyingNothingAndSendsNoInterruptWhileClaudeWorks)
+	t.Run("typingInCopyModeDoesNotReachInput", typingInCopyModeDoesNotReachInput)
+	t.Run("upAndDownScrollViewTheLeastThatShowsWholePickedBlock", upAndDownScrollViewTheLeastThatShowsWholePickedBlock)
+	t.Run("pickingBlockTallerThanViewPutsItsTopRuleAtViewTop", pickingBlockTallerThanViewPutsItsTopRuleAtViewTop)
 }
 
-func ctrlYCopiesNewestCodeBlockAndShowsCopiedUntilNextKey(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(60, 30).withEntries([]claudecode.DialogueEntry{
-		{Kind: claudecode.ReplyEntry, Text: "Old:\n\n```\nold block\n```"},
-		{Kind: claudecode.ReplyEntry, Text: "New:\n\n```go\nfirst()\n```\n\n```go\nfunc f() {\n\treturn \n}\n```\n\nDone."},
+var ctrlY = tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl}
+
+// modelWithThreeCodeBlocks holds the blocks "one", then "two" and a function in a newer reply, under a prompt.
+func modelWithThreeCodeBlocks(height int) zenModel {
+	model := newZenModel(nil, testAppearance, "alt+x", "")
+	return model.withSize(60, height).withEntries([]claudecode.DialogueEntry{
+		{Kind: claudecode.ReplyEntry, Text: "Old:\n\n```sh\none\n```"},
+		{Kind: claudecode.ReplyEntry, Text: "New:\n\n```go\ntwo\n```\n\n```go\nfunc f() {\n\treturn \n}\n```\n\nDone."},
 		{Kind: claudecode.PromptEntry, Text: "thanks\n\n```\nmine\n```"},
 	}, nil)
-	copied, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+}
+
+func pressedKeys(t *testing.T, model zenModel, keys ...tea.KeyPressMsg) zenModel {
+	t.Helper()
+	for _, key := range keys {
+		updated, _ := model.Update(key)
+		model = updated.(zenModel)
+	}
+	return model
+}
+
+// pickedTopRules are the screen's top rules drawn with a heavy iris corner, without their colors.
+func pickedTopRules(model zenModel) []string {
+	rules := []string{}
+	for _, row := range strings.Split(model.screen(), "\n") {
+		if strings.HasPrefix(row, " "+pickedFrameRuleStyle.Render("┏")) {
+			rules = append(rules, strings.TrimSpace(ansi.Strip(row)))
+		}
+	}
+	return rules
+}
+
+func ctrlYOpensCopyModeOnNewestBlockAndEnterCopiesItAndShowsCopiedUntilNextKey(t *testing.T) {
+	opened, openCmd := modelWithThreeCodeBlocks(30).Update(ctrlY)
+	openedModel := opened.(zenModel)
+	if openCmd != nil {
+		t.Errorf("ctrl+y returned %#v, want copy mode opened with nothing copied", openCmd())
+	}
+	if picked := pickedTopRules(openedModel); len(picked) != 1 || !strings.HasPrefix(picked[0], "┏━ go ━") ||
+		!strings.Contains(picked[0], copyKeyHint) {
+		t.Errorf("iris top rules = %q, want only the newest go block's, with its hint", picked)
+	}
+	if !strings.Contains(ansi.Strip(openedModel.screen()), copyModeHint) {
+		t.Errorf("screen in copy mode lacks the copy mode hint:\n%s", ansi.Strip(openedModel.screen()))
+	}
+	copied, copyCmd := openedModel.Update(pressedKey(tea.KeyEnter))
 	copiedModel := copied.(zenModel)
 	if copyCmd == nil {
-		t.Fatalf("ctrl+y returned no command, want the clipboard set")
+		t.Fatalf("Enter in copy mode returned no command, want the clipboard set")
 	}
 	if got, want := copyCmd(), tea.SetClipboard("func f() {\n\treturn \n}")(); !reflect.DeepEqual(got, want) {
-		t.Errorf("ctrl+y sets the clipboard with %#v, want %#v", got, want)
+		t.Errorf("Enter sets the clipboard with %#v, want %#v", got, want)
 	}
-	if !strings.Contains(ansi.Strip(copiedModel.screen()), "Copied the last code block.") {
-		t.Errorf("screen after ctrl+y lacks the copy status:\n%s", ansi.Strip(copiedModel.screen()))
+	if copiedModel.copyMode != nil || len(pickedTopRules(copiedModel)) != 0 {
+		t.Errorf("copy mode still open after Enter, iris top rules %q", pickedTopRules(copiedModel))
+	}
+	if !strings.Contains(ansi.Strip(copiedModel.screen()), "Copied the code block.") {
+		t.Errorf("screen after Enter lacks the copy status:\n%s", ansi.Strip(copiedModel.screen()))
 	}
 	typed, _ := copiedModel.Update(pressedKey('a'))
-	if strings.Contains(ansi.Strip(typed.(zenModel).screen()), "Copied the last code block.") {
+	if strings.Contains(ansi.Strip(typed.(zenModel).screen()), "Copied the code block.") {
 		t.Errorf("screen after the next key still shows the copy status:\n%s", ansi.Strip(typed.(zenModel).screen()))
 	}
 }
 
 func ctrlYSaysSoAndCopiesNothingWithNoCodeBlock(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 12).withEntries([]claudecode.DialogueEntry{
 		{Kind: claudecode.PromptEntry, Text: "hello"}, {Kind: claudecode.ReplyEntry, Text: "Use `inline code` only."},
 	}, nil)
-	pressed, copyCmd := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
+	pressed, copyCmd := model.Update(ctrlY)
 	if copyCmd != nil {
 		t.Errorf("ctrl+y with no code block returned %#v, want no command", copyCmd())
+	}
+	if pressed.(zenModel).copyMode != nil {
+		t.Errorf("ctrl+y with no code block opened copy mode %+v", pressed.(zenModel).copyMode)
 	}
 	if !strings.Contains(ansi.Strip(pressed.(zenModel).screen()), "No code block to copy.") {
 		t.Errorf("screen lacks the no code block status:\n%s", ansi.Strip(pressed.(zenModel).screen()))
@@ -285,7 +344,7 @@ func newStatusReplacesCopyStatus(t *testing.T) {
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
-			model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+			model := newZenModel(nil, testAppearance, "alt+x", "")
 			model = model.withSize(60, 12)
 			copied, _ := model.Update(tea.KeyPressMsg{Code: 'y', Mod: tea.ModCtrl})
 			updated, _ := copied.(zenModel).Update(testCase.statusMsg)
@@ -298,7 +357,7 @@ func newStatusReplacesCopyStatus(t *testing.T) {
 }
 
 func copyHintMovesToNewestCodeBlockWhenReplyBringsOne(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 40).withEntries([]claudecode.DialogueEntry{{Kind: claudecode.ReplyEntry, Text: "```sh\nfirst\n```"}}, nil)
 	model = model.withEntries([]claudecode.DialogueEntry{
 		{Kind: claudecode.PromptEntry, Text: "and then?"}, {Kind: claudecode.ReplyEntry, Text: "```go\nsecond\n```"},
@@ -314,8 +373,140 @@ func copyHintMovesToNewestCodeBlockWhenReplyBringsOne(t *testing.T) {
 	}
 }
 
+func upAndDownPickOlderAndNewerBlockAndStopAtOldestAndNewest(t *testing.T) {
+	model := pressedKeys(t, modelWithThreeCodeBlocks(40), ctrlY)
+	steps := []struct {
+		key        tea.KeyPressMsg
+		wantPicked int
+	}{
+		{key: pressedKey(tea.KeyUp), wantPicked: 1},
+		{key: pressedKey(tea.KeyUp), wantPicked: 0},
+		{key: pressedKey(tea.KeyUp), wantPicked: 0},
+		{key: pressedKey(tea.KeyDown), wantPicked: 1},
+		{key: pressedKey(tea.KeyDown), wantPicked: 2},
+		{key: pressedKey(tea.KeyDown), wantPicked: 2},
+	}
+	for number, step := range steps {
+		model = pressedKeys(t, model, step.key)
+		if model.copyMode.picked != step.wantPicked {
+			t.Fatalf("step %d: picked block %d, want %d", number+1, model.copyMode.picked, step.wantPicked)
+		}
+		if picked := pickedTopRules(model); len(picked) != 1 {
+			t.Errorf("step %d: iris top rules = %q, want exactly one", number+1, picked)
+		}
+	}
+	oldest := pressedKeys(t, model, pressedKey(tea.KeyUp), pressedKey(tea.KeyUp))
+	if picked := pickedTopRules(oldest); len(picked) != 1 || !strings.HasPrefix(picked[0], "┏━ sh ━") {
+		t.Errorf("iris top rules after two Ups = %q, want the oldest sh block's", picked)
+	}
+}
+
+func spaceMarksPickedBlockAfterItsLanguageAndSpaceAgainUnmarksIt(t *testing.T) {
+	marked := pressedKeys(t, modelWithThreeCodeBlocks(40), ctrlY, pressedKey(tea.KeyUp), pressedKey(tea.KeySpace))
+	if picked := pickedTopRules(marked); len(picked) != 1 || !strings.HasPrefix(picked[0], "┏━ go · marked ━") {
+		t.Errorf("iris top rules after Space = %q, want the picked go block's with marked after the language", picked)
+	}
+	if !strings.Contains(marked.screen(), markedLabelStyle.Render(markedLabel)) {
+		t.Errorf("screen after Space lacks marked in iris:\n%q", marked.screen())
+	}
+	unmarked := pressedKeys(t, marked, pressedKey(tea.KeySpace))
+	if strings.Contains(ansi.Strip(unmarked.screen()), markedLabel) {
+		t.Errorf("screen after a second Space still shows marked:\n%s", ansi.Strip(unmarked.screen()))
+	}
+}
+
+func enterCopiesMarkedBlocksOldestFirstJoinedByBlankLine(t *testing.T) {
+	// marked newest first, and the pick left on a block that is not marked
+	model := pressedKeys(t, modelWithThreeCodeBlocks(40), ctrlY, pressedKey(tea.KeySpace), pressedKey(tea.KeyUp),
+		pressedKey(tea.KeyUp), pressedKey(tea.KeySpace), pressedKey(tea.KeyDown))
+	copied, copyCmd := model.Update(pressedKey(tea.KeyEnter))
+	if copyCmd == nil {
+		t.Fatalf("Enter in copy mode returned no command, want the clipboard set")
+	}
+	if got, want := copyCmd(), tea.SetClipboard("one\n\nfunc f() {\n\treturn \n}")(); !reflect.DeepEqual(got, want) {
+		t.Errorf("Enter sets the clipboard with %#v, want %#v", got, want)
+	}
+	shown := ansi.Strip(copied.(zenModel).screen())
+	if !strings.Contains(shown, "Copied 2 code blocks.") || strings.Contains(shown, markedLabel) {
+		t.Errorf("screen after Enter lacks the copy status or still shows marked:\n%s", shown)
+	}
+}
+
+func escLeavesCopyModeCopyingNothingAndSendsNoInterruptWhileClaudeWorks(t *testing.T) {
+	recorder := &agentRecorder{}
+	model := modelWithThreeCodeBlocks(40)
+	model.agent, model.agentStatus = recorder, AgentWorking
+	model = pressedKeys(t, model, ctrlY, pressedKey(tea.KeySpace))
+	closed, escCmd := model.Update(pressedKey(tea.KeyEscape))
+	if escCmd != nil {
+		t.Errorf("Esc in copy mode returned %#v, want no command", escCmd())
+	}
+	if recorder.calls != nil {
+		t.Errorf("Esc in copy mode sent %q to Claude, want nothing", recorder.calls)
+	}
+	closedModel := closed.(zenModel)
+	shown := ansi.Strip(closedModel.screen())
+	if closedModel.copyMode != nil || strings.Contains(shown, markedLabel) || strings.Contains(shown, copyModeHint) ||
+		strings.Contains(shown, "Copied") || len(pickedTopRules(closedModel)) != 0 {
+		t.Errorf("screen after Esc in copy mode still shows copy mode or a copy:\n%s", shown)
+	}
+}
+
+func typingInCopyModeDoesNotReachInput(t *testing.T) {
+	model := modelWithThreeCodeBlocks(40)
+	model.input.SetValue("draft")
+	typed := pressedKeys(t, model, ctrlY, pressedKey('x'), pressedKey(tea.KeyBackspace))
+	if value := typed.input.Value(); value != "draft" {
+		t.Errorf("input after typing in copy mode = %q, want %q", value, "draft")
+	}
+	if typed.copyMode == nil {
+		t.Error("typing closed copy mode")
+	}
+}
+
+func upAndDownScrollViewTheLeastThatShowsWholePickedBlock(t *testing.T) {
+	model := newZenModel(nil, testAppearance, "alt+x", "")
+	entries := numberedPrompts(1, 6)
+	entries = append(entries, claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "```sh\nold line 1\nold line 2\n```"})
+	entries = append(entries, numberedPrompts(7, 12)...)
+	entries = append(entries, claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "```go\nnew\n```"})
+	model = model.withSize(60, 14).withEntries(entries, nil)
+	// the entries' last row, above the blank row and the copy mode hint
+	lastEntryRow := func(model zenModel) string {
+		rows := strings.Split(entriesText(t, model), "\n")
+		return strings.TrimSpace(rows[len(rows)-3])
+	}
+	olderPicked := pressedKeys(t, model, ctrlY, pressedKey(tea.KeyUp))
+	shownRows := strings.Split(entriesText(t, olderPicked), "\n")
+	if !strings.HasPrefix(strings.TrimSpace(shownRows[0]), "┏━ sh ━") || !strings.Contains(shownRows[1], "old line 1") ||
+		!strings.Contains(shownRows[2], "old line 2") || !strings.HasPrefix(strings.TrimSpace(shownRows[3]), "┗━") {
+		t.Errorf("screen after Up does not start on the picked block's top rule:\n%s", strings.Join(shownRows, "\n"))
+	}
+	newerPicked := pressedKeys(t, olderPicked, pressedKey(tea.KeyDown))
+	if !strings.Contains(entriesText(t, newerPicked), "┏━ go ━") || !strings.HasPrefix(lastEntryRow(newerPicked), "┗━") {
+		t.Errorf("screen after Down does not end on the newest block's bottom rule:\n%s", entriesText(t, newerPicked))
+	}
+}
+
+func pickingBlockTallerThanViewPutsItsTopRuleAtViewTop(t *testing.T) {
+	lines := []string{}
+	for number := 1; number <= 30; number++ {
+		lines = append(lines, fmt.Sprintf("line %d", number))
+	}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
+	model = model.withSize(60, 14).withEntries([]claudecode.DialogueEntry{
+		{Kind: claudecode.ReplyEntry, Text: "```sh\n" + strings.Join(lines, "\n") + "\n```"},
+		{Kind: claudecode.PromptEntry, Text: "and then?"}, {Kind: claudecode.ReplyEntry, Text: "```go\nnew\n```"},
+	}, nil)
+	picked := pressedKeys(t, model, ctrlY, pressedKey(tea.KeyUp))
+	rows := strings.Split(entriesText(t, picked), "\n")
+	if !strings.HasPrefix(strings.TrimSpace(rows[0]), "┏━ sh ━") || !strings.Contains(rows[1], "line 1") {
+		t.Errorf("screen after Up onto a tall block = %q, want its top rule on the first row", rows)
+	}
+}
+
 func modelWithTypedPrompt(prompt string) zenModel {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 20).withEntries([]claudecode.DialogueEntry{{Kind: claudecode.ReplyEntry, Text: "Ready."}}, nil)
 	model.input.SetValue(prompt)
 	return model
@@ -326,16 +517,16 @@ func enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace(t *testing.T) {
 	if sendPrompt == nil {
 		t.Fatal("Enter returned no command to send the prompt")
 	}
-	if screenText := ansi.Strip(sent.(zenModel).screen()); !strings.Contains(screenText, "▌ rename the widget") {
+	if screenText := entriesText(t, sent.(zenModel)); !strings.Contains(screenText, "> rename the widget") {
 		t.Fatalf("screen after Enter lacks the prompt's band:\n%s", screenText)
 	}
 	delivered, _ := sent.Update(promptSentMsg{prompt: "rename the widget", err: nil})
 	sentModel := delivered.(zenModel)
 	// a reply written before Claude records the prompt goes above the early band
 	withReply := sentModel.withEntries([]claudecode.DialogueEntry{{Kind: claudecode.ReplyEntry, Text: "Still on the last step."}}, nil)
-	replyText := ansi.Strip(withReply.screen())
+	replyText := entriesText(t, withReply)
 	replyAt := strings.Index(replyText, "Still on the last step.")
-	bandAt := strings.Index(replyText, "▌ rename the widget")
+	bandAt := strings.Index(replyText, "> rename the widget")
 	if replyAt < 0 || bandAt < 0 || replyAt > bandAt {
 		t.Errorf("screen lacks the reply or the early band, or has the reply under the band:\n%s", replyText)
 	}
@@ -349,13 +540,27 @@ func enterShowsPromptBandAtOnceAndTranscriptPromptTakesItsPlace(t *testing.T) {
 	}
 }
 
-func enterGivesSlashCommandNoEarlyBand(t *testing.T) {
-	sent, sendPrompt := modelWithTypedPrompt("/compact").withKey(pressedKey(tea.KeyEnter))
+func enterGivesSlashCommandEarlyBandThatItsCommandEntryReplaces(t *testing.T) {
+	sent, sendPrompt := modelWithTypedPrompt("/effort high").withKey(pressedKey(tea.KeyEnter))
 	if sendPrompt == nil {
 		t.Fatal("Enter returned no command to send the slash command")
 	}
-	if screenText := ansi.Strip(sent.(zenModel).screen()); strings.Contains(screenText, "▌ /compact") {
-		t.Errorf("screen after Enter on a slash command shows a band:\n%s", screenText)
+	if screenText := entriesText(t, sent.(zenModel)); !strings.Contains(screenText, "> /effort high") {
+		t.Fatalf("screen after Enter on a slash command lacks its band:\n%s", screenText)
+	}
+	recorded := sent.(zenModel).withEntries([]claudecode.DialogueEntry{
+		{Kind: claudecode.CommandEntry, Text: "/effort high"},
+		{Kind: claudecode.CommandOutputEntry, Text: "Set effort level to high"},
+	}, nil)
+	recordedText := entriesText(t, recorded)
+	if count := strings.Count(recordedText, "/effort high"); count != 1 {
+		t.Errorf("screen shows the command %d times after the transcript records it, want 1:\n%s", count, recordedText)
+	}
+	if !strings.Contains(recordedText, "Set effort level to high") {
+		t.Errorf("screen lacks the command's output:\n%s", recordedText)
+	}
+	if len(recorded.earlyPrompts) != 0 {
+		t.Errorf("earlyPrompts = %+v, want none once the transcript holds the command", recorded.earlyPrompts)
 	}
 }
 
@@ -363,8 +568,8 @@ func failedSendRemovesEarlyBandAndShowsRefusal(t *testing.T) {
 	sent, _ := modelWithTypedPrompt("rename the widget").withKey(pressedKey(tea.KeyEnter))
 	refused, _ := sent.(zenModel).Update(promptSentMsg{prompt: "rename the widget", err: ErrAgentBlocked})
 	refusedModel := refused.(zenModel)
-	screenText := ansi.Strip(refusedModel.screen())
-	if strings.Contains(screenText, "▌ rename the widget") {
+	screenText := entriesText(t, refusedModel)
+	if strings.Contains(screenText, "> rename the widget") {
 		t.Errorf("screen after a refused send still shows the early band:\n%s", screenText)
 	}
 	if !strings.Contains(screenText, "Claude is waiting for you. Press alt+x to answer.") {
@@ -373,7 +578,7 @@ func failedSendRemovesEarlyBandAndShowsRefusal(t *testing.T) {
 }
 
 func screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 	scrolledModel := scrolled.(zenModel)
@@ -395,27 +600,40 @@ func screenScrolledUpStaysOnItsRowsWhenEarlyBandComesAndGoes(t *testing.T) {
 // inputRows are the screen rows under the separator.
 func inputRows(t *testing.T, model zenModel) []string {
 	t.Helper()
+	_, rowsUnder := screenRowsAroundSeparator(t, model)
+	return rowsUnder
+}
+
+// entriesText is the screen above the separator, where a band and the input's own "> " cannot be confused.
+func entriesText(t *testing.T, model zenModel) string {
+	t.Helper()
+	rowsAbove, _ := screenRowsAroundSeparator(t, model)
+	return strings.Join(rowsAbove, "\n")
+}
+
+func screenRowsAroundSeparator(t *testing.T, model zenModel) ([]string, []string) {
+	t.Helper()
 	rows := strings.Split(ansi.Strip(model.screen()), "\n")
 	for index, row := range rows {
 		if strings.HasPrefix(row, "───") {
-			return rows[index+1:]
+			return rows[:index], rows[index+1:]
 		}
 	}
 	t.Fatalf("screen has no separator:\n%s", strings.Join(rows, "\n"))
-	return nil
+	return nil, nil
 }
 
 func TestInput(t *testing.T) {
 	t.Run("inputWrapsLongLineUnderItsPrompt", inputWrapsLongLineUnderItsPrompt)
 	t.Run("inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight", inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight)
-	t.Run("upAndDownMoveCursorInInputOfSeveralRows", upAndDownMoveCursorInInputOfSeveralRows)
+	t.Run("upAndDownMoveCursorWithinInputAndScrollEntriesFromItsEdgeRows", upAndDownMoveCursorWithinInputAndScrollEntriesFromItsEdgeRows)
 	t.Run("entriesFillRowsInputGivesBack", entriesFillRowsInputGivesBack)
 }
 
 func inputWrapsLongLineUnderItsPrompt(t *testing.T) {
 	words := strings.Repeat("wrap these words ", 12)
 	for _, width := range []int{40, 90} {
-		model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+		model := newZenModel(nil, testAppearance, "alt+x", "")
 		model = model.withSize(width, 30)
 		model.input.SetValue(words)
 		rows := inputRows(t, model)
@@ -442,7 +660,7 @@ func inputWrapsLongLineUnderItsPrompt(t *testing.T) {
 }
 
 func inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 24).withEntries(numberedPrompts(1, 20), nil)
 	for lineCount := 1; lineCount <= 11; lineCount++ {
 		model.input.SetValue(strings.TrimSuffix(strings.Repeat("line\n", lineCount), "\n"))
@@ -461,8 +679,7 @@ func inputGrowsRowAtATimeUpToEightAndScreenKeepsItsHeight(t *testing.T) {
 }
 
 func shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines(t *testing.T) {
-	model := zenModel{agent: &agentRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}
+	model := newZenModel(&agentRecorder{}, testAppearance, "alt+x", "")
 	model = model.withSize(60, 24)
 	shiftEnter := tea.KeyPressMsg{Code: tea.KeyEnter, Mod: tea.ModShift}
 	for _, keyPress := range []tea.KeyPressMsg{{Code: 'o', Text: "o"}, {Code: 'n', Text: "n"}, {Code: 'e', Text: "e"},
@@ -480,37 +697,67 @@ func shiftEnterStartsNewLineAndEnterSendsTextWithItsNewlines(t *testing.T) {
 	}
 }
 
-func upAndDownMoveCursorInInputOfSeveralRows(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
-	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
-	model.input.SetValue("first\nsecond")
-	movedUp, _ := model.withKey(pressedKey(tea.KeyUp))
-	movedUpModel := movedUp.(zenModel)
-	if movedUpModel.rowsBelowView != 0 || movedUpModel.input.Line() != 0 {
-		t.Errorf("after Up: rows below view %d, input line %d, want 0 and 0", movedUpModel.rowsBelowView,
-			movedUpModel.input.Line())
+func upAndDownMoveCursorWithinInputAndScrollEntriesFromItsEdgeRows(t *testing.T) {
+	cases := []struct {
+		name       string
+		inputValue string
+		inputRows  int
+	}{
+		{name: "three lines", inputValue: "first\nsecond\nthird", inputRows: 3},
+		{name: "line and wrapped line", inputValue: "first\n" + strings.Repeat("wrapped words ", 4), inputRows: 3},
+		{name: "one line", inputValue: "only", inputRows: 1},
 	}
-	movedDown, _ := movedUpModel.withKey(pressedKey(tea.KeyDown))
-	if line := movedDown.(zenModel).input.Line(); line != 1 {
-		t.Errorf("after Down: input line %d, want 1", line)
+	for _, testCase := range cases {
+		t.Run(testCase.name, func(t *testing.T) {
+			model := newZenModel(nil, testAppearance, "alt+x", "")
+			model = model.withSize(40, 16)
+			model.input.SetValue(testCase.inputValue)
+			model = model.withEntries(numberedPrompts(1, 20), nil)
+			if rows := inputRows(t, model); len(rows) != testCase.inputRows {
+				t.Fatalf("input rows = %q, want %d", rows, testCase.inputRows)
+			}
+			for press := 1; press <= testCase.inputRows; press++ {
+				pressed, _ := model.withKey(pressedKey(tea.KeyUp))
+				model = pressed.(zenModel)
+				wantRowsBelowView := 0
+				if press == testCase.inputRows {
+					wantRowsBelowView = arrowScrollRows
+				}
+				if model.rowsBelowView != wantRowsBelowView {
+					t.Errorf("Up %d: rows below the view = %d, want %d", press, model.rowsBelowView, wantRowsBelowView)
+				}
+			}
+			for press := 1; press <= testCase.inputRows; press++ {
+				pressed, _ := model.withKey(pressedKey(tea.KeyDown))
+				model = pressed.(zenModel)
+				wantRowsBelowView := arrowScrollRows
+				if press == testCase.inputRows {
+					wantRowsBelowView = 0
+				}
+				if model.rowsBelowView != wantRowsBelowView {
+					t.Errorf("Down %d: rows below the view = %d, want %d", press, model.rowsBelowView, wantRowsBelowView)
+				}
+			}
+			if value := model.input.Value(); value != testCase.inputValue {
+				t.Errorf("input = %q, want the draft %q unchanged", value, testCase.inputValue)
+			}
+		})
 	}
 }
 
 // modelWithInputThenEntries sets the input before the entries arrive, so they are drawn under its final height.
 func modelWithInputThenEntries(inputValue string) zenModel {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 24)
 	model.input.SetValue(inputValue)
 	return model.withEntries(numberedPrompts(1, 20), nil)
 }
 
 func entriesFillRowsInputGivesBack(t *testing.T) {
-	model := zenModel{agent: &agentRecorder{}, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}
+	model := newZenModel(&agentRecorder{}, testAppearance, "alt+x", "")
 	model = model.withSize(60, 24)
-	// Entries that arrive under a tall input are drawn only down to its top row. A slash command gets no early band
-	// to draw the entries on Enter.
-	model.input.SetValue("/x" + strings.Repeat("\nx", inputMaxRows-1))
+	// Entries that arrive under a tall input are drawn only down to its top row.
+	model.input.SetValue("x" + strings.Repeat("\nx", inputMaxRows-1))
 	model = model.withEntries(numberedPrompts(1, 20), nil)
 	for range 8 {
 		erased, _ := model.withKey(pressedKey(tea.KeyBackspace))
@@ -519,9 +766,11 @@ func entriesFillRowsInputGivesBack(t *testing.T) {
 	if screen, want := model.screen(), modelWithInputThenEntries(model.input.Value()).screen(); screen != want {
 		t.Errorf("screen after Backspace shrank the input:\n%s\nwant:\n%s", screen, want)
 	}
+	prompt := model.input.Value()
 	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
-	if screen, want := sent.(zenModel).screen(), modelWithInputThenEntries("").screen(); screen != want {
-		t.Errorf("screen after Enter cleared the input:\n%s\nwant:\n%s", screen, want)
+	want := modelWithInputThenEntries("").withEarlyPromptAdded(earlyPrompt{text: prompt, pastes: nil, queued: false})
+	if screen := sent.(zenModel).screen(); screen != want.screen() {
+		t.Errorf("screen after Enter cleared the input:\n%s\nwant:\n%s", screen, want.screen())
 	}
 }
 
@@ -530,6 +779,8 @@ type agentRecorder struct {
 	calls      []string
 	promptErr  error
 	typedInput string
+	// pickerShown stands for a picker or dialog in place of Claude's input box.
+	pickerShown bool
 }
 
 func (r *agentRecorder) SendPrompt(prompt string) error {
@@ -560,6 +811,14 @@ func (r *agentRecorder) WaitForSessionID() (string, error) {
 	return "", nil
 }
 
+func (r *agentRecorder) InputBoxShown() (bool, error) {
+	return !r.pickerShown, nil
+}
+
+func (r *agentRecorder) WorkingDirectory() (string, error) {
+	return "", nil
+}
+
 func modelWithSentPrompts(prompts []string) zenModel {
 	model := modelWithTypedPrompt("")
 	for _, prompt := range prompts {
@@ -570,50 +829,65 @@ func modelWithSentPrompts(prompts []string) zenModel {
 	return model
 }
 
-func bandTextRow(model zenModel, text string) string {
-	for _, row := range strings.Split(ansi.Strip(model.screen()), "\n") {
-		if strings.Contains(row, "▌ "+text) {
+func bandTextRow(t *testing.T, model zenModel, text string) string {
+	t.Helper()
+	for _, row := range strings.Split(entriesText(t, model), "\n") {
+		if strings.Contains(row, "> "+text) {
 			return row
 		}
 	}
 	return ""
 }
 
+func rowUnderBand(t *testing.T, model zenModel, text string) string {
+	t.Helper()
+	rows := strings.Split(entriesText(t, model), "\n")
+	for index, row := range rows[:len(rows)-1] {
+		if strings.Contains(row, "> "+text) {
+			return strings.TrimRight(rows[index+1], " ")
+		}
+	}
+	return ""
+}
+
 func TestQueuedPrompts(t *testing.T) {
-	t.Run("enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt", enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt)
-	t.Run("dequeueClearsOldestMarkedBand", dequeueClearsOldestMarkedBand)
+	t.Run("enqueueAddsNoteRowUnderBandWithItsTextAndMatchingRemoveDropsIt", enqueueAddsNoteRowUnderBandWithItsTextAndMatchingRemoveDropsIt)
+	t.Run("dequeueDropsNoteRowOfOldestMarkedBand", dequeueDropsNoteRowOfOldestMarkedBand)
 	t.Run("removeThatDropsPromptRemovesItsBand", removeThatDropsPromptRemovesItsBand)
 	t.Run("queueOperationsApplyInTheirPlaceAmongEntries", queueOperationsApplyInTheirPlaceAmongEntries)
 }
 
-func enqueueMarksBandWithItsTextAndMatchingRemoveClearsIt(t *testing.T) {
+func enqueueAddsNoteRowUnderBandWithItsTextAndMatchingRemoveDropsIt(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"})
 	queued := model.withEntries(nil, []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}}})
-	if row := bandTextRow(queued, "second one"); !strings.HasSuffix(row, " "+queuedNote+" ") {
-		t.Errorf("band row after the enqueue = %q, want it to end in the queued note", row)
+	if row := rowUnderBand(t, queued, "second one"); row != "   "+queuedNote {
+		t.Errorf("row under the band after the enqueue = %q, want the queued note under the prompt text", row)
 	}
-	if row := bandTextRow(queued, "first one"); strings.Contains(row, "queued") {
-		t.Errorf("band row of the other prompt = %q, want no queued note", row)
+	if row := rowUnderBand(t, queued, "first one"); strings.Contains(row, "queued") {
+		t.Errorf("row under the other prompt's band = %q, want no queued note", row)
 	}
 	taken := queued.withEntries(nil, []placedQueueOperation{
 		{QueueOperation: claudecode.QueueOperation{Operation: "remove", Reason: "absorbed_mid_turn", Text: "second one"}},
 	})
-	if row := bandTextRow(taken, "second one"); row == "" || strings.Contains(row, "queued") {
-		t.Errorf("band row after the remove = %q, want the band without the queued note", row)
+	if bandTextRow(t, taken, "second one") == "" {
+		t.Errorf("band left with the remove, want it kept:\n%s", ansi.Strip(taken.screen()))
+	}
+	if row := rowUnderBand(t, taken, "second one"); strings.Contains(row, "queued") {
+		t.Errorf("row under the band after the remove = %q, want no queued note", row)
 	}
 }
 
-func dequeueClearsOldestMarkedBand(t *testing.T) {
+func dequeueDropsNoteRowOfOldestMarkedBand(t *testing.T) {
 	model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []placedQueueOperation{
 		{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "first one"}},
 		{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}},
 		{QueueOperation: claudecode.QueueOperation{Operation: "dequeue"}},
 	})
-	if row := bandTextRow(model, "first one"); strings.Contains(row, "queued") {
-		t.Errorf("oldest band row after the dequeue = %q, want no queued note", row)
+	if row := rowUnderBand(t, model, "first one"); strings.Contains(row, "queued") {
+		t.Errorf("row under the oldest band after the dequeue = %q, want no queued note", row)
 	}
-	if row := bandTextRow(model, "second one"); !strings.Contains(row, "queued") {
-		t.Errorf("newer band row after the dequeue = %q, want the queued note", row)
+	if row := rowUnderBand(t, model, "second one"); row != "   "+queuedNote {
+		t.Errorf("row under the newer band after the dequeue = %q, want the queued note", row)
 	}
 }
 
@@ -628,10 +902,10 @@ func removeThatDropsPromptRemovesItsBand(t *testing.T) {
 			model := modelWithSentPrompts([]string{"first one", "second one"}).withEntries(nil, []placedQueueOperation{
 				{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: "second one"}}, {QueueOperation: removal},
 			})
-			if row := bandTextRow(model, "second one"); row != "" {
+			if row := bandTextRow(t, model, "second one"); row != "" {
 				t.Errorf("screen still shows the removed band: %q", row)
 			}
-			if row := bandTextRow(model, "first one"); row == "" {
+			if row := bandTextRow(t, model, "first one"); row == "" {
 				t.Errorf("screen lost the band of the prompt Claude did not queue:\n%s", ansi.Strip(model.screen()))
 			}
 		})
@@ -662,11 +936,10 @@ func queueOperationsApplyInTheirPlaceAmongEntries(t *testing.T) {
 	}
 }
 
-func screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+func screenScrolledUpStaysOnItsRowsWhenQueuedNoteRowComesAndGoes(t *testing.T) {
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
-	// fits one band row at width 40, and wraps onto two short of the note
-	prompt := "prompt 21 with words that wrap now"
+	prompt := "prompt 21"
 	model.input.SetValue(prompt)
 	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
 	scrolled, _ := sent.(zenModel).withKey(pressedKey(tea.KeyPgUp))
@@ -674,7 +947,7 @@ func screenScrolledUpStaysOnItsRowsWhenQueuedNoteRewrapsBand(t *testing.T) {
 	before := scrolledModel.screen()
 	queued := scrolledModel.withEntries(nil, []placedQueueOperation{{QueueOperation: claudecode.QueueOperation{Operation: "enqueue", Text: prompt}}})
 	if len(queued.earlyPromptRows()) == len(scrolledModel.earlyPromptRows()) {
-		t.Fatalf("the queued note left the band at %d rows, want it rewrapped", len(queued.earlyPromptRows()))
+		t.Fatalf("the enqueue left the early prompts at %d rows, want the note row added", len(queued.earlyPromptRows()))
 	}
 	if after := queued.screen(); after != before {
 		t.Errorf("screen moved when the band was marked:\nbefore:\n%s\nafter:\n%s", before, after)
@@ -781,7 +1054,7 @@ func escBeforeReplyMovesPromptClaudePutBackIntoZenInput(t *testing.T) {
 	if value := restored.(zenModel).input.Value(); value != "move this draft\ntyped since" {
 		t.Errorf("input = %q, want the cancelled prompt ahead of the text typed since", value)
 	}
-	if screenText := ansi.Strip(restored.(zenModel).screen()); strings.Contains(screenText, "▌ move this draft") {
+	if screenText := entriesText(t, restored.(zenModel)); strings.Contains(screenText, "> move this draft") {
 		t.Errorf("the cancelled prompt's band still shows:\n%s", screenText)
 	}
 	if _, again := restored.(zenModel).Update(agentStatusMsg{status: AgentIdle}); again != nil {
@@ -813,7 +1086,7 @@ func cancelledPromptRestoreChangesNothingWhenClaudeGaveNoPromptBack(t *testing.T
 }
 
 func screenScrolledUpStaysOnItsRowsWhenCancelledPromptIsDropped(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 	before := scrolled.(zenModel).screen()
@@ -856,7 +1129,9 @@ func followTranscriptMessages(t *testing.T, path string) chan tea.Msg {
 	})
 	messages := make(chan tea.Msg, 16)
 	go func() {
-		messages <- fatalMsg{err: followTranscript(transcript, func(msg tea.Msg) { messages <- msg })}
+		sameSession := func() (string, error) { return "session", nil }
+		_, err := followTranscript(transcript, "session", sameSession, func(msg tea.Msg) { messages <- msg })
+		messages <- fatalMsg{err: err}
 	}()
 	return messages
 }
@@ -894,6 +1169,7 @@ func TestStatusRow(t *testing.T) {
 	t.Run("turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne",
 		turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne)
 	t.Run("blockedAndIdleRowsShowNoToolCallOrTime", blockedAndIdleRowsShowNoToolCallOrTime)
+	t.Run("waitingLineWrapsAtNarrowWidthWithinScreenHeight", waitingLineWrapsAtNarrowWidthWithinScreenHeight)
 	t.Run("clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds", clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds)
 	t.Run("doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain", doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain)
 	t.Run("doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking", doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking)
@@ -940,6 +1216,10 @@ func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 				`{"type":"attachment","timestamp":"2026-11-20T10:00:30.000Z","attachment":{"type":"queued_command",` +
 					`"prompt":"also check the logs","commandMode":"prompt","origin":{"kind":"human"}}}`},
 			wantRow: "Reading a.go · 42s"},
+		{name: "slash command starts a turn",
+			lines: []string{promptLine("2026-11-20T09:00:00.000Z", "first"), toolCallLine("Bash", `{"command":"ls"}`),
+				promptLine("2026-11-20T10:00:00.000Z", `<command-name>/effort</command-name>\n<command-args>high</command-args>`)},
+			wantRow: "Working... · 42s"},
 	}
 	for _, testCase := range cases {
 		t.Run(testCase.name, func(t *testing.T) {
@@ -954,7 +1234,7 @@ func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 					t.Fatalf("TurnAfterLine(%s): %v", line, err)
 				}
 			}
-			if row := ansi.Strip(statusLine(AgentWorking, turn, now, 80)); row != testCase.wantRow {
+			if row := ansi.Strip(statusLine(AgentWorking, turn, now, 80, testAppearance, "alt+x")); row != testCase.wantRow {
 				t.Errorf("working row = %q, want %q", row, testCase.wantRow)
 			}
 		})
@@ -964,7 +1244,7 @@ func workingRowNamesNewestToolCallOfTurnAndTimeSinceItsPrompt(t *testing.T) {
 func workingRowCutsToolCallAtViewWidthAndKeepsTime(t *testing.T) {
 	promptTime := time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC)
 	turn := claudecode.CurrentTurn{PromptTime: promptTime, ToolCallActivity: "Running a very long command description"}
-	if row := ansi.Strip(statusLine(AgentWorking, turn, promptTime.Add(42*time.Second), 20)); row != "Running a ver · 42s" {
+	if row := ansi.Strip(statusLine(AgentWorking, turn, promptTime.Add(42*time.Second), 20, testAppearance, "alt+x")); row != "Running a ver · 42s" {
 		t.Errorf("working row at width 20 = %q, want the tool call cut to fit the time in the 19 columns after the "+
 			"margin", row)
 	}
@@ -992,16 +1272,39 @@ func turnDurationShowsSecondsUnderAMinuteAndMinutesThenSecondsSpacedApartFromOne
 func blockedAndIdleRowsShowNoToolCallOrTime(t *testing.T) {
 	turn := claudecode.CurrentTurn{PromptTime: time.Date(2026, 11, 20, 10, 0, 0, 0, time.UTC), ToolCallActivity: "Reading go.mod"}
 	now := turn.PromptTime.Add(42 * time.Second)
-	if row := ansi.Strip(statusLine(AgentBlocked, turn, now, 80)); row != "Waiting for you in Claude. Press alt+x to answer." {
+	if row := ansi.Strip(statusLine(AgentBlocked, turn, now, 80, testAppearance, "alt+z")); row != "Waiting for you in Claude. Press alt+z to answer." {
 		t.Errorf("blocked row = %q", row)
 	}
-	if row := statusLine(AgentIdle, turn, now, 80); row != "" {
+	if row := statusLine(AgentIdle, turn, now, 80, testAppearance, "alt+x"); row != "" {
 		t.Errorf("idle row = %q, want it empty", row)
 	}
 }
 
+func waitingLineWrapsAtNarrowWidthWithinScreenHeight(t *testing.T) {
+	sized := newZenModel(nil, testAppearance, "alt+x", "").withSize(24, 12)
+	blockedModel, _ := sized.Update(agentStatusMsg{status: AgentBlocked})
+	pickerModel := sized
+	pickerModel.agentPickerShown = true
+	want := []string{" Waiting for you in", " Claude. Press alt+x to", " answer."}
+	for name, model := range map[string]zenModel{"blocked": blockedModel.(zenModel), "picker": pickerModel} {
+		t.Run(name, func(t *testing.T) {
+			rows := strings.Split(ansi.Strip(model.screen()), "\n")
+			if len(rows) != 12 {
+				t.Fatalf("screen has %d rows, want the height of 12", len(rows))
+			}
+			trimmedRows := []string{}
+			for _, row := range rows {
+				trimmedRows = append(trimmedRows, strings.TrimRight(row, " "))
+			}
+			if got := trimmedRows[7:10]; !reflect.DeepEqual(got, want) {
+				t.Errorf("rows above the separator = %q, want %q\nscreen:\n%s", got, want, strings.Join(rows, "\n"))
+			}
+		})
+	}
+}
+
 func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-42 * time.Second)
 	read, _ := model.Update(entriesReadMsg{turn: claudecode.CurrentTurn{PromptTime: promptTime, ToolCallActivity: "Reading go.mod"}})
@@ -1038,7 +1341,7 @@ func clockTicksWhileWorkingAndWorkingRowClearsWhenTurnEnds(t *testing.T) {
 }
 
 func doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 12)
 	promptTime := time.Now().Add(-time.Hour)
 	read, _ := model.Update(entriesReadMsg{turn: claudecode.CurrentTurn{PromptTime: promptTime}})
@@ -1067,7 +1370,7 @@ func doneRowShowsTurnTimeAfterClaudeStopsWorkingUntilItWorksAgain(t *testing.T) 
 
 func doneRowStaysHiddenWhenEscInterruptedTurnOrClaudeWasNeverSeenWorking(t *testing.T) {
 	recorder := &agentRecorder{}
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(60, 12)
 	model.agent, model.agentStatus = recorder, AgentWorking
 	pressed, _ := model.withKey(tea.KeyPressMsg{Code: tea.KeyEscape})
@@ -1112,12 +1415,13 @@ func TestPaste(t *testing.T) {
 	t.Run("shortPasteShowsAsItsText", shortPasteShowsAsItsText)
 	t.Run("failedSendPutsPastesBackAsLabelsNumberedInOrder", failedSendPutsPastesBackAsLabelsNumberedInOrder)
 	t.Run("transcriptPromptReplacingBandShowsBandsPastesAsLabels", transcriptPromptReplacingBandShowsBandsPastesAsLabels)
-	t.Run("zenViewSavesDraftWithPastesExpanded", zenViewSavesDraftWithPastesExpanded)
+	t.Run("zenViewSavesDraftAsLabelsAndPastes", zenViewSavesDraftAsLabelsAndPastes)
+	t.Run("restoredDraftShowsLabelsAndEnterSendsPastesExpanded", restoredDraftShowsLabelsAndEnterSendsPastesExpanded)
 	t.Run("screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand", screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand)
 }
 
 func screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand(t *testing.T) {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	scrolled, _ := model.withKey(pressedKey(tea.KeyPgUp))
 	pasted, _ := scrolled.Update(tea.PasteMsg{Content: fourLinePaste})
@@ -1131,7 +1435,7 @@ func screenScrolledUpStaysOnItsRowsWhenPastedPromptReplacesBand(t *testing.T) {
 			before, after)
 	}
 	if newestRows := plainRows(recorded.entryRows[len(recorded.entryRows)-1]); !reflect.DeepEqual(newestRows,
-		[]string{"", " ▌ [Pasted text #1 +3 lines]"}) {
+		[]string{"", " > [Pasted text #1 +3 lines]"}) {
 		t.Errorf("rows of the recorded prompt = %q, want its paste's label", newestRows)
 	}
 }
@@ -1157,7 +1461,7 @@ func longPasteShowsAsLabelAndEnterSendsWholeText(t *testing.T) {
 	if want := []string{"prompt look at line one\nline two\nline three\nline four"}; !reflect.DeepEqual(recorder.calls, want) {
 		t.Errorf("sent %q, want %q", recorder.calls, want)
 	}
-	if row := bandTextRow(sent.(zenModel), "look at [Pasted text #1 +3 lines]"); row == "" {
+	if row := bandTextRow(t, sent.(zenModel), "look at [Pasted text #1 +3 lines]"); row == "" {
 		t.Errorf("screen after Enter lacks the band with the paste's label:\n%s", ansi.Strip(sent.(zenModel).screen()))
 	}
 }
@@ -1206,45 +1510,240 @@ func transcriptPromptReplacingBandShowsBandsPastesAsLabels(t *testing.T) {
 	text := "look at line one\nline two\nline three\nline four"
 	recorded := sent.(zenModel).withEntries([]claudecode.DialogueEntry{
 		{Kind: claudecode.PromptEntry, Text: text, Pastes: []string{text}}}, nil)
-	screenText := ansi.Strip(recorded.screen())
-	if !strings.Contains(screenText, "▌ look at [Pasted text #1 +3 lines]") || strings.Contains(screenText, "line two") {
+	screenText := entriesText(t, recorded)
+	if !strings.Contains(screenText, "> look at [Pasted text #1 +3 lines]") || strings.Contains(screenText, "line two") {
 		t.Errorf("screen after the transcript records the prompt lacks its paste's label or shows the paste:\n%s",
 			screenText)
 	}
 }
 
-func zenViewSavesDraftWithPastesExpanded(t *testing.T) {
-	draft := ""
-	saveDraft := func(text string) error {
-		draft = text
+func zenViewSavesDraftAsLabelsAndPastes(t *testing.T) {
+	saved := []Draft{}
+	saveDraft := func(draft Draft) error {
+		saved = append(saved, draft)
 		return nil
 	}
-	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}, saveDraft: saveDraft, savedDraft: ""}
+	var view tea.Model = draftSavingView{zen: newZenModel(nil, testAppearance, "alt+x", ""), saveDraft: saveDraft,
+		savedDraft: Draft{}}
 	view, _ = view.Update(tea.PasteMsg{Content: fourLinePaste})
-	if want := "line one\nline two\nline three\nline four"; draft != want {
-		t.Errorf("draft = %q, want %q", draft, want)
+	want := []Draft{{Text: "[Pasted text #1 +3 lines]", Pastes: []string{"line one\nline two\nline three\nline four"}}}
+	if !reflect.DeepEqual(saved, want) {
+		t.Errorf("saved drafts = %+q, want %+q", saved, want)
+	}
+}
+
+func restoredDraftShowsLabelsAndEnterSendsPastesExpanded(t *testing.T) {
+	recorder := &agentRecorder{}
+	paste := "line one\nline two\nline three\nline four"
+	model := newZenModel(recorder, testAppearance, "alt+x", "").withSize(60, 20).
+		withDraftRestored(Draft{Text: "look at [Pasted text #1 +3 lines]", Pastes: []string{paste}}, nil)
+	if value := model.input.Value(); value != "look at [Pasted text #1 +3 lines]" {
+		t.Fatalf("input of the restored draft = %q, want the paste's label", value)
+	}
+	_, send := model.withKey(pressedKey(tea.KeyEnter))
+	send()
+	if want := []string{"prompt look at " + paste}; !reflect.DeepEqual(recorder.calls, want) {
+		t.Errorf("sent %q, want %q", recorder.calls, want)
 	}
 }
 
 func TestDraftSavingView(t *testing.T) {
 	t.Run("zenViewSavesUnsentTextAsDraftOfItsClaudePane", zenViewSavesUnsentTextAsDraftOfItsClaudePane)
+	t.Run("zenViewSavesNothingWhenNeitherShownTextNorPastesChanged", zenViewSavesNothingWhenNeitherShownTextNorPastesChanged)
+	t.Run("draftReadErrorShowsOnStatusLineUntilNextKeyOrNewerError", draftReadErrorShowsOnStatusLineUntilNextKeyOrNewerError)
 }
 
 func zenViewSavesUnsentTextAsDraftOfItsClaudePane(t *testing.T) {
-	draft := ""
-	saveDraft := func(text string) error {
-		draft = text
+	draft := Draft{}
+	saveDraft := func(saved Draft) error {
+		draft = saved
 		return nil
 	}
-	var view tea.Model = draftSavingView{zen: zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}, saveDraft: saveDraft, savedDraft: ""}
+	var view tea.Model = draftSavingView{zen: newZenModel(nil, testAppearance, "alt+x", ""), saveDraft: saveDraft,
+		savedDraft: Draft{}}
 	for _, keyPress := range []tea.KeyPressMsg{
 		{Code: 'h', Text: "h"}, {Code: 'i', Text: "i"}, {Code: tea.KeyEnter, Mod: tea.ModShift}, {Code: 'x', Text: "x"},
 	} {
 		view, _ = view.Update(keyPress)
 	}
-	if draft != "hi\nx" {
-		t.Errorf("draft = %q, want %q", draft, "hi\nx")
+	if draft.Text != "hi\nx" || len(draft.Pastes) != 0 {
+		t.Errorf("draft = %+q, want %q and no pastes", draft, "hi\nx")
+	}
+}
+
+func zenViewSavesNothingWhenNeitherShownTextNorPastesChanged(t *testing.T) {
+	saves := 0
+	saveDraft := func(draft Draft) error {
+		saves++
+		return nil
+	}
+	draft := Draft{Text: "look at [Pasted text #1 +3 lines]", Pastes: []string{"line one\nline two\nline three\nline four"}}
+	zen := newZenModel(nil, testAppearance, "alt+x", "").withSize(60, 20).withDraftRestored(draft, nil)
+	var view tea.Model = draftSavingView{zen: zen, saveDraft: saveDraft, savedDraft: draft}
+	for _, msg := range []tea.Msg{tea.WindowSizeMsg{Width: 70, Height: 20}, pressedKey(tea.KeyLeft), pressedKey(tea.KeyEnd)} {
+		view, _ = view.Update(msg)
+	}
+	if saves != 0 {
+		t.Errorf("saves after updates that leave the draft as it was = %d, want 0", saves)
+	}
+}
+
+func draftReadErrorShowsOnStatusLineUntilNextKeyOrNewerError(t *testing.T) {
+	draftErr := errors.New("Cannot read the draft C:/state/draft.default.w1-p1: invalid character 'a'")
+	model := newZenModel(nil, testAppearance, "alt+x", "").withSize(60, 20).withDraftRestored(Draft{}, draftErr)
+	if shown := ansi.Strip(model.shownStatus()); shown != draftErr.Error() {
+		t.Errorf("status line = %q, want %q", shown, draftErr.Error())
+	}
+	if value := model.input.Value(); value != "" {
+		t.Errorf("input = %q, want it empty", value)
+	}
+	typed := pressedKeys(t, model, tea.KeyPressMsg{Code: 'h', Text: "h"})
+	if shown := ansi.Strip(typed.shownStatus()); strings.Contains(shown, "Cannot read the draft") {
+		t.Errorf("status line after a key = %q, want the draft error gone", shown)
+	}
+	problem := errors.New("herdr pane get failed")
+	updated, _ := model.Update(problemMsg{err: problem})
+	if shown := ansi.Strip(updated.(zenModel).shownStatus()); shown != problem.Error() {
+		t.Errorf("status line after a newer error = %q, want %q", shown, problem.Error())
+	}
+}
+
+func TestFatal(t *testing.T) {
+	t.Run("fatalErrorWrapsAtViewWidthSoItsEndShows", fatalErrorWrapsAtViewWidthSoItsEndShows)
+}
+
+func fatalErrorWrapsAtViewWidthSoItsEndShows(t *testing.T) {
+	model := newZenModel(nil, testAppearance, "alt+x", "").withSize(30, 12)
+	model.fatal = errors.New(`C:\Users\someone\AppData\Roaming\calmpane\config.toml: colors.link = "#9ccfd" is not a color`)
+	rows := strings.Split(model.View().Content, "\n")
+	for _, row := range rows {
+		if rowWidth := ansi.StringWidth(row); rowWidth > 30 {
+			t.Errorf("row %q is %d columns wide, more than the view's 30", row, rowWidth)
+		}
+	}
+	if shown := strings.Join(plainRows(rows), " "); !strings.Contains(shown, `colors.link = "#9ccfd" is not a color`) {
+		t.Errorf("fatal rows = %q, want the whole error", rows)
+	}
+}
+
+func TestSessionChange(t *testing.T) {
+	t.Run("sessionChangeDropsEntriesAndFollowsNewTranscriptAndStatusLine",
+		sessionChangeDropsEntriesAndFollowsNewTranscriptAndStatusLine)
+	t.Run("followTranscriptReturnsReportedSessionOnceItDiffers", followTranscriptReturnsReportedSessionOnceItDiffers)
+}
+
+// switchingSessionAgent reports the session its test last set, as Claude's hooks do after /clear.
+type switchingSessionAgent struct {
+	agentRecorder
+	sessionIDs chan string
+	sessionID  string
+}
+
+func (a *switchingSessionAgent) WaitForSessionID() (string, error) {
+	select {
+	case sessionID := <-a.sessionIDs:
+		a.sessionID = sessionID
+	default:
+	}
+	return a.sessionID, nil
+}
+
+func writeTranscriptLine(t *testing.T, home string, sessionID string, line string) {
+	t.Helper()
+	path := filepath.Join(home, ".claude", "projects", "scratch", sessionID+".jsonl")
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(line+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// modelAfterMessagesUntil applies the messages followAgentSession sends to model until done holds for the model a
+// message gives and the message.
+func modelAfterMessagesUntil(t *testing.T, model zenModel, messages <-chan tea.Msg,
+	done func(model zenModel, msg tea.Msg) bool) zenModel {
+	t.Helper()
+	for {
+		select {
+		case msg := <-messages:
+			if fatal, isFatal := msg.(fatalMsg); isFatal {
+				t.Fatalf("followAgentSession: %v", fatal.err)
+			}
+			updated, _ := model.Update(msg)
+			model = updated.(zenModel)
+			if done(model, msg) {
+				return model
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatalf("after 10 s the view shows:\n%s", ansi.Strip(model.screen()))
+		}
+	}
+}
+
+func sessionChangeDropsEntriesAndFollowsNewTranscriptAndStatusLine(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	statusLineDir := t.TempDir()
+	writeTranscriptLine(t, home, "first", `{"type":"user","message":{"role":"user","content":"before the clear"}}`)
+	for sessionID, line := range map[string]string{"first": "first status\n", "second": "second status\n"} {
+		if err := os.WriteFile(filepath.Join(statusLineDir, sessionID), []byte(line), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	agent := &switchingSessionAgent{sessionIDs: make(chan string, 1), sessionID: "first"}
+	messages := make(chan tea.Msg, 64)
+	go followAgentSession(agent, statusLineDir, func(msg tea.Msg) { messages <- msg })
+	model := newZenModel(agent, testAppearance, "alt+x", "").withSize(60, 20)
+	showsBoth := func(model zenModel, prompt string, status string) bool {
+		screen := ansi.Strip(model.screen())
+		return strings.Contains(screen, prompt) && strings.Contains(screen, status)
+	}
+	model = modelAfterMessagesUntil(t, model, messages, func(model zenModel, _ tea.Msg) bool {
+		return showsBoth(model, "before the clear", "first status")
+	})
+	writeTranscriptLine(t, home, "second", `{"type":"user","message":{"role":"user","content":"after the clear"}}`)
+	agent.sessionIDs <- "second"
+	model = modelAfterMessagesUntil(t, model, messages, sessionChanged)
+	if screen := ansi.Strip(model.screen()); strings.Contains(screen, "before the clear") {
+		t.Errorf("view after the session change still shows the old session's prompt:\n%s", screen)
+	}
+	model = modelAfterMessagesUntil(t, model, messages, func(model zenModel, _ tea.Msg) bool {
+		return showsBoth(model, "after the clear", "second status")
+	})
+	if screen := ansi.Strip(model.screen()); strings.Contains(screen, "before the clear") {
+		t.Errorf("view of the new session shows the old session's prompt:\n%s", screen)
+	}
+	// a session with no transcript leaves the second one closed, so the temporary home can be removed
+	agent.sessionIDs <- "none"
+	modelAfterMessagesUntil(t, model, messages, sessionChanged)
+}
+
+func sessionChanged(_ zenModel, msg tea.Msg) bool {
+	_, changed := msg.(sessionChangedMsg)
+	return changed
+}
+
+func followTranscriptReturnsReportedSessionOnceItDiffers(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "session.jsonl")
+	if err := os.WriteFile(path, []byte(`{"type":"user","message":{"role":"user","content":"first"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write transcript: %v", err)
+	}
+	transcript, err := os.Open(path)
+	if err != nil {
+		t.Fatalf("open transcript: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := transcript.Close(); err != nil {
+			t.Errorf("close transcript: %v", err)
+		}
+	})
+	newSession := func() (string, error) { return "after clear", nil }
+	next, err := followTranscript(transcript, "before clear", newSession, func(tea.Msg) {})
+	if err != nil {
+		t.Fatalf("followTranscript: %v", err)
+	}
+	if next != "after clear" {
+		t.Errorf("followTranscript returned session %q, want %q", next, "after clear")
 	}
 }

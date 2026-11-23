@@ -24,7 +24,8 @@ calmpane claude
 calmpane claude --continue
 ```
 
-alt+x switches between the zen view and Claude's own screen. calmpane exits with Claude's exit code when Claude exits.
+alt+x, or the key the config sets, switches between the zen view and Claude's own screen. calmpane exits
+with Claude's exit code when Claude exits.
 
 `calmpane.exe` also runs as a herdr plugin. The plugin manifest and key bindings live in
 [windows-dev](https://github.com/CLBRITTON2/windows-dev) (`herdr/zen`, `herdr/config.toml`).
@@ -37,10 +38,23 @@ alt+x switches between the zen view and Claude's own screen. calmpane exits with
 | shift+enter  | New line                                                          |
 | ctrl+enter   | Send the prompt now, even while Claude works                      |
 | esc          | Interrupt Claude while it works                                   |
-| ctrl+y       | Copy the newest code block                                        |
-| up, down     | Scroll three rows, or move the cursor in an input of several rows |
+| ctrl+y       | Open copy mode to copy any code block, or several                 |
+| up, down     | Move the cursor, or scroll three rows from the input's edge rows  |
 | pgup, pgdown | Scroll a page                                                     |
 | end          | Jump to the newest entry                                          |
+
+## Config
+
+calmpane reads `%APPDATA%\calmpane\config.toml` when the zen view or `calmpane claude` starts, and writes the
+documented [example](internal/config/config.toml) there when the file is missing. Every field is required, and a
+field calmpane does not know, a missing field or a bad value stops the view with an error naming it.
+
+- `[colors]`: the `#rrggbb` color of each part of the view.
+- `[lines]`: the characters the separator and the code block frames are drawn with.
+- `[code]`: the [chroma](https://github.com/alecthomas/chroma/tree/master/styles) style that highlights code blocks,
+  and the style of their comments.
+- `[status_line]`: the folder Claude's status line command writes to, shown under the separator.
+- `[keys]`: the key that shows Claude's own screen.
 
 ## Reading Claude Code transcripts from Go
 

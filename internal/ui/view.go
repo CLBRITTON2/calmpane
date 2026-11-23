@@ -7,10 +7,10 @@ import (
 	"io"
 	"math"
 	"os"
-	"path/filepath"
 	"slices"
 	"strings"
 	"time"
+	"unicode"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
@@ -20,10 +20,8 @@ import (
 	"github.com/charmbracelet/x/ansi"
 
 	"github.com/CLBRITTON2/calmpane/claudecode"
+	"github.com/CLBRITTON2/calmpane/internal/config"
 )
-
-// toggleKey is the key windows-dev's herdr/config.toml binds to the windows-dev.zen.toggle action.
-const toggleKey = "alt+x"
 
 // herdr turns each wheel notch over a pane that does not capture the mouse into one Up or Down key.
 const arrowScrollRows = 3
@@ -77,6 +75,37 @@ type claudeKeysSentMsg struct {
 	err error
 }
 
+// sessionChangedMsg reports that the agent switched to another session, as /clear or an in-place /resume does.
+type sessionChangedMsg struct{}
+
+// slashCommandsLoadedMsg carries the commands and skills on disk and the history of the commands zen sent.
+type slashCommandsLoadedMsg struct {
+	commands []claudecode.SlashCommand
+	uses     []SlashUse
+	err      error
+}
+
+type slashUsesWrittenMsg struct {
+	err error
+}
+
+// agentPickerShownMsg reports that the agent took its input box away after a slash command, for a picker or dialog.
+type agentPickerShownMsg struct {
+	prompt string
+}
+
+// agentPickerClosedMsg reports that the agent's input box is back.
+type agentPickerClosedMsg struct {
+	prompt string
+	err    error
+}
+
+// slashCommandSettledMsg reports that a slash command has had its time to reach the transcript.
+type slashCommandSettledMsg struct {
+	prompt string
+	err    error
+}
+
 // agentInputTakenMsg carries the prompt Claude put back in its input box when an Esc cancelled the turn before a reply.
 type agentInputTakenMsg struct {
 	text string
@@ -89,8 +118,19 @@ type earlyPrompt struct {
 	queued bool
 }
 
+// copyMode holds the picked and marked code blocks as indexes into zenModel.codeBlocks.
+type copyMode struct {
+	picked int
+	marked []int
+}
+
+const copyModeHint = "Up/Down picks a block · Space marks · Enter copies · Esc cancels"
+
 type zenModel struct {
-	agent Agent
+	agent      Agent
+	appearance appearance
+	// claudeScreenKey shows Claude's own screen, and the waiting row names it.
+	claudeScreenKey string
 	// fatal is shown alone until a key ends the view, since herdr closes the pane as soon as zen exits.
 	fatal   error
 	entries []claudecode.DialogueEntry
@@ -111,10 +151,14 @@ type zenModel struct {
 	endedTurnRow string
 	// status reports the latest problem in place of the agent status row, until the agent status changes.
 	status string
-	// copyStatus reports a ctrl+y copy in place of status until the next key or status.
+	// copyStatus reports a copy in place of status until the next key or status.
 	copyStatus string
-	// newestCodeBlock is the block ctrl+y copies and whose frame carries the hint, nil while no reply holds one.
-	newestCodeBlock *codeBlockPosition
+	// draftStatus reports a draft that could not be read, in place of status until the next key or a newer error.
+	draftStatus string
+	// codeBlocks holds where each code block of the replies is, oldest first. The newest one's frame carries the hint.
+	codeBlocks []codeBlockPosition
+	// copyMode is nil while copy mode is closed.
+	copyMode *copyMode
 	// earlyPrompts holds the prompts Enter sent that the transcript has not shown yet, drawn as bands under the
 	// entries until a prompt entry with the same text arrives.
 	earlyPrompts []earlyPrompt
@@ -122,6 +166,15 @@ type zenModel struct {
 	// pastes holds each paste the input shows as a label, numbered from 1 in order, until the input is sent.
 	pastes           []string
 	claudeStatusLine string
+	// slashCommands holds the commands and skills on disk, none until they are read.
+	slashCommands []claudecode.SlashCommand
+	slashUses     []SlashUse
+	// slashHistoryFile keeps slashUses across views.
+	slashHistoryFile string
+	// slashMenu is nil while the menu is closed.
+	slashMenu *slashMenu
+	// agentPickerShown is set while the agent shows a picker or dialog in place of its input box after a slash command.
+	agentPickerShown bool
 }
 
 // Shift+Enter inserts a newline, since Enter sends.
@@ -147,13 +200,26 @@ func NewPromptInput() textarea.Model {
 	return input
 }
 
-// RunZenView shows startErr alone until a key ends the view, when it is not nil.
-func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, startErr error) error {
-	model := zenModel{agent: agent, fatal: startErr, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}
-	model.input.SetValue(draft)
+func newZenModel(agent Agent, appearance appearance, claudeScreenKey string, slashHistoryFile string) zenModel {
+	return zenModel{agent: agent, appearance: appearance, claudeScreenKey: claudeScreenKey,
+		entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput(),
+		slashCommands: []claudecode.SlashCommand{}, slashUses: []SlashUse{}, slashHistoryFile: slashHistoryFile}
+}
+
+// RunZenView shows startErr alone until a key ends the view, when it is not nil, and then follows no session, since
+// settings may not hold a valid config. A draftErr shows on the status line, over an empty input.
+func RunZenView(agent Agent, settings config.Config, draft Draft, draftErr error, saveDraft func(draft Draft) error,
+	slashHistoryFile string, startErr error) error {
+	model := newZenModel(agent, appearance{}, settings.Keys.ClaudeScreen, slashHistoryFile)
+	model.fatal = startErr
+	if startErr == nil {
+		model.appearance, model.fatal = newAppearance(settings)
+	}
+	model = model.withDraftRestored(draft, draftErr)
 	program := tea.NewProgram(draftSavingView{zen: model, saveDraft: saveDraft, savedDraft: draft})
-	go followAgentSession(agent, program.Send)
+	if model.fatal == nil {
+		go followAgentSession(agent, settings.StatusLine.Dir, program.Send)
+	}
 	finalModel, runErr := program.Run()
 	if finalModel, isDraftSavingView := finalModel.(draftSavingView); isDraftSavingView {
 		return errors.Join(finalModel.zen.fatal, runErr)
@@ -161,47 +227,68 @@ func RunZenView(agent Agent, draft string, saveDraft func(draft string) error, s
 	return runErr
 }
 
-// followAgentSession sends the dialogue, status and status line of the session the agent reports, until a failure
-// it sends as fatal.
-func followAgentSession(agent Agent, send func(tea.Msg)) {
+// followAgentSession sends the dialogue, status and status line of the session the agent reports, and of each session
+// it switches to after, until a failure it sends as fatal. An empty statusLineDir sends no status line.
+func followAgentSession(agent Agent, statusLineDir string, send func(tea.Msg)) {
 	sessionID, err := agent.WaitForSessionID()
 	if err != nil {
 		send(fatalMsg{err: err})
 		return
 	}
-	localAppData, err := os.UserCacheDir()
-	if err != nil {
-		send(fatalMsg{err: fmt.Errorf("find the local app data directory: %w", err)})
-		return
-	}
 	conversationSessionIDs := make(chan string)
-	// windows-dev's claude/statusline.ps1 writes a file named for each session there
-	statusLineDir := filepath.Join(localAppData, "windows-dev", "statusline")
-	go followClaudeStatusLine(statusLineDir, conversationSessionIDs, 300*time.Millisecond, send)
+	if statusLineDir == "" {
+		go func() {
+			for range conversationSessionIDs {
+			}
+		}()
+	} else {
+		go followClaudeStatusLine(statusLineDir, conversationSessionIDs, 300*time.Millisecond, send)
+	}
 	transcript, err := claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
 	if err != nil {
 		send(fatalMsg{err: err})
 		return
 	}
 	go pollAgentStatus(agent, send)
-	err = followTranscript(transcript, send)
-	send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err), transcript.Close())})
+	for {
+		nextSessionID, err := followTranscript(transcript, sessionID, agent.WaitForSessionID, send)
+		if err != nil {
+			send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err), transcript.Close())})
+			return
+		}
+		if err := transcript.Close(); err != nil {
+			send(fatalMsg{err: fmt.Errorf("Cannot close %s: %w", transcript.Name(), err)})
+			return
+		}
+		sessionID = nextSessionID
+		send(sessionChangedMsg{})
+		transcript, err = claudecode.WaitForTranscript(sessionID, conversationSessionIDs)
+		if err != nil {
+			send(fatalMsg{err: err})
+			return
+		}
+	}
 }
 
+// sessionCheckInterval is how often followTranscript asks the agent for its session while the transcript is quiet.
+const sessionCheckInterval = time.Second
+
 // followTranscript sends the tail's entries in one message once it reaches the end of the file, then each new
-// line's entries as they are written.
-func followTranscript(transcript *os.File, send func(tea.Msg)) error {
+// line's entries as they are written, until reportedSessionID gives a session other than sessionID, which it returns.
+func followTranscript(transcript *os.File, sessionID string, reportedSessionID func() (string, error),
+	send func(tea.Msg)) (string, error) {
 	info, err := transcript.Stat()
 	if err != nil {
-		return err
+		return "", err
 	}
 	start, err := claudecode.TailStart(transcript, info.Size(), 2*1024*1024)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if _, err := transcript.Seek(start, io.SeekStart); err != nil {
-		return err
+		return "", err
 	}
+	sessionChecked := time.Now()
 	reader := bufio.NewReaderSize(transcript, 1024*1024)
 	var partialLine []byte
 	unsentEntries := []claudecode.DialogueEntry{}
@@ -219,11 +306,21 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 				unsentQueueOperations = []placedQueueOperation{}
 				turnChanged = false
 			}
+			if time.Since(sessionChecked) >= sessionCheckInterval {
+				sessionChecked = time.Now()
+				reported, err := reportedSessionID()
+				if err != nil {
+					return "", fmt.Errorf("ask the agent for its session: %w", err)
+				}
+				if reported != sessionID {
+					return reported, nil
+				}
+			}
 			time.Sleep(200 * time.Millisecond)
 			continue
 		}
 		if err != nil {
-			return err
+			return "", err
 		}
 		line = append(partialLine, line...)
 		partialLine = nil
@@ -240,7 +337,7 @@ func followTranscript(transcript *os.File, send func(tea.Msg)) error {
 		if err != nil {
 			startLine, countErr := LineNumberAt(transcript, start)
 			if countErr != nil {
-				return countErr
+				return "", countErr
 			}
 			send(problemMsg{err: fmt.Errorf("Cannot read line %d of %s: %w", startLine+linesRead-1,
 				transcript.Name(), err)})
@@ -289,10 +386,13 @@ func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 	}
 }
 
-func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.Time, width int) string {
+func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.Time, width int, appearance appearance,
+	claudeScreenKey string) string {
 	switch agentStatus {
 	case AgentBlocked:
-		return waitingStyle.Render("Waiting for you in Claude. Press " + toggleKey + " to answer.")
+		// wrapped, since the key to press comes last; each row keeps the one column of left margin
+		waiting := "Waiting for you in Claude. Press " + claudeScreenKey + " to answer."
+		return appearance.waitingStyle.Render(ansi.Wrap(waiting, max(width-1, 1), ""))
 	case AgentWorking:
 		activity := turn.ToolCallActivity
 		if activity == "" {
@@ -304,7 +404,7 @@ func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.T
 		}
 		// the row's left margin takes one column
 		activityWidth := max(width-1-ansi.StringWidth(duration), 0)
-		return workingStyle.Render(ansi.Truncate(activity, activityWidth, "") + duration)
+		return appearance.workingStyle.Render(ansi.Truncate(activity, activityWidth, "") + duration)
 	default:
 		return ""
 	}
@@ -319,7 +419,20 @@ func TurnDuration(elapsed time.Duration) string {
 }
 
 func (m zenModel) Init() tea.Cmd {
-	return textarea.Blink
+	return tea.Batch(textarea.Blink, loadSlashCommands(m.agent, m.slashHistoryFile))
+}
+
+// loadSlashCommands reads the commands and skills Claude loads from disk for its working directory, and the history.
+func loadSlashCommands(agent Agent, slashHistoryFile string) tea.Cmd {
+	return func() tea.Msg {
+		uses, usesErr := SavedSlashUses(slashHistoryFile)
+		directory, err := agent.WorkingDirectory()
+		if err != nil {
+			return slashCommandsLoadedMsg{commands: nil, uses: uses, err: errors.Join(usesErr, err)}
+		}
+		commands, err := claudecode.CustomSlashCommands(directory)
+		return slashCommandsLoadedMsg{commands: commands, uses: uses, err: errors.Join(usesErr, err)}
+	}
 }
 
 func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -331,8 +444,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withEntries(msg.entries, msg.queueOperations), nil
 	case claudeKeysSentMsg:
 		if msg.err != nil {
-			m.status = errorStyle.Render(msg.err.Error())
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
 			m.copyStatus = ""
+			m.draftStatus = ""
 		}
 		return m, nil
 	case agentStatusMsg:
@@ -374,14 +488,16 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.withVisibleRowsDrawn(), nil
 	case agentInputTakenMsg:
 		if msg.err != nil {
-			m.status = errorStyle.Render(msg.err.Error())
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
 			m.copyStatus = ""
+			m.draftStatus = ""
 			return m, nil
 		}
 		return m.withCancelledPromptRestored(msg.text), nil
 	case problemMsg:
-		m.status = errorStyle.Render(msg.err.Error())
+		m.status = m.appearance.errorStyle.Render(msg.err.Error())
 		m.copyStatus = ""
+		m.draftStatus = ""
 		return m, nil
 	case fatalMsg:
 		m.fatal = msg.err
@@ -389,23 +505,68 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case claudeStatusLineMsg:
 		m.claudeStatusLine = msg.line
 		return m.withVisibleRowsDrawn(), nil
+	case sessionChangedMsg:
+		m.entries = []claudecode.DialogueEntry{}
+		m.entryRows = [][]string{}
+		m.codeBlocks = nil
+		m.copyMode = nil
+		m.earlyPrompts = nil
+		m.rowsBelowView = 0
+		m.turn = claudecode.CurrentTurn{}
+		m.endedTurnRow = ""
+		return m.withVisibleRowsDrawn(), nil
+	case slashCommandsLoadedMsg:
+		if msg.err != nil {
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
+		}
+		m.slashUses = msg.uses
+		m.slashCommands = msg.commands
+		return m.withVisibleRowsDrawn(), nil
+	case slashUsesWrittenMsg:
+		if msg.err != nil {
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
+		}
+		return m, nil
+	case agentPickerShownMsg:
+		m.agentPickerShown = true
+		return m.withVisibleRowsDrawn(), waitForAgentInputBox(m.agent, msg.prompt)
+	case agentPickerClosedMsg:
+		m.agentPickerShown = false
+		if msg.err != nil {
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
+		}
+		prompt := msg.prompt
+		return m.withVisibleRowsDrawn(), tea.Tick(time.Second, func(time.Time) tea.Msg {
+			return slashCommandSettledMsg{prompt: prompt}
+		})
+	case slashCommandSettledMsg:
+		if msg.err != nil {
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
+		}
+		isUnqueuedWithText := func(early earlyPrompt) bool { return !early.queued && early.text == msg.prompt }
+		return m.withEarlyPromptRemovedAt(slices.IndexFunc(m.earlyPrompts, isUnqueuedWithText)), nil
 	case promptSentMsg:
 		m.copyStatus = ""
+		m.draftStatus = ""
 		switch {
 		case errors.Is(msg.err, ErrAgentBlocked):
-			m.status = errorStyle.Render("Claude is waiting for you. Press " + toggleKey + " to answer.")
+			m.status = m.appearance.errorStyle.Render("Claude is waiting for you. Press " + m.claudeScreenKey + " to answer.")
 		case msg.err != nil:
-			m.status = errorStyle.Render(msg.err.Error())
+			m.status = m.appearance.errorStyle.Render(msg.err.Error())
 		}
-		if msg.err == nil {
+		if msg.err != nil {
+			return m.withPromptPutBack(msg.prompt, msg.pastes), nil
+		}
+		if !strings.HasPrefix(msg.prompt, "/") {
 			return m, nil
 		}
-		return m.withPromptPutBack(msg.prompt, msg.pastes), nil
+		return m.withSlashCommandSent(strings.TrimSpace(msg.prompt))
 	case tea.KeyPressMsg:
 		if m.fatal != nil {
 			return m, tea.Quit
 		}
 		m.copyStatus = ""
+		m.draftStatus = ""
 		return m.withKey(msg)
 	case tea.PasteMsg:
 		return m.withPasteInserted(msg.Content)
@@ -415,34 +576,87 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, inputCmd
 }
 
+// withSlashCommandSent counts the command in the history under its name as typed, unless the name holds a / and so is
+// a path such as /tmp/x, and watches for the picker or dialog the command may show in place of Claude's input box.
+func (m zenModel) withSlashCommandSent(command string) (zenModel, tea.Cmd) {
+	watchForPicker := watchForAgentPicker(m.agent, command)
+	name := strings.TrimPrefix(strings.Fields(command)[0], "/")
+	if name == "" || strings.Contains(name, "/") {
+		return m, watchForPicker
+	}
+	m.slashUses = SlashUsesAfterUse(m.slashUses, name, time.Now())
+	uses, historyFile := m.slashUses, m.slashHistoryFile
+	writeUses := func() tea.Msg { return slashUsesWrittenMsg{err: WriteSlashUses(historyFile, uses)} }
+	return m, tea.Batch(watchForPicker, writeUses)
+}
+
+// agentPickerWait is how long after a slash command a picker or dialog may take to replace Claude's input box.
+const agentPickerWait = 3 * time.Second
+
+// watchForAgentPicker reports the agent's input box gone within agentPickerWait of the command, or the command
+// settled when it stays.
+func watchForAgentPicker(agent Agent, command string) tea.Cmd {
+	return func() tea.Msg {
+		deadline := time.Now().Add(agentPickerWait)
+		for time.Now().Before(deadline) {
+			shown, err := agent.InputBoxShown()
+			if err != nil {
+				return slashCommandSettledMsg{prompt: command, err: err}
+			}
+			if !shown {
+				return agentPickerShownMsg{prompt: command}
+			}
+			time.Sleep(200 * time.Millisecond)
+		}
+		return slashCommandSettledMsg{prompt: command}
+	}
+}
+
+func waitForAgentInputBox(agent Agent, command string) tea.Cmd {
+	return func() tea.Msg {
+		for {
+			shown, err := agent.InputBoxShown()
+			if err != nil || shown {
+				return agentPickerClosedMsg{prompt: command, err: err}
+			}
+			time.Sleep(300 * time.Millisecond)
+		}
+	}
+}
+
 func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.copyMode != nil {
+		return m.withCopyModeKey(msg)
+	}
+	if m.slashMenu != nil {
+		if model, cmd, handled := m.withSlashMenuKey(msg); handled {
+			return model, cmd
+		}
+	}
 	switch msg.String() {
 	case "pgup":
 		return m.withRowsBelowViewChangedBy(m.entriesHeight()), nil
 	case "pgdown":
 		return m.withRowsBelowViewChangedBy(-m.entriesHeight()), nil
 	case "up":
-		if m.input.Height() == 1 {
+		if m.input.Line() == 0 && m.input.LineInfo().RowOffset == 0 {
 			return m.withRowsBelowViewChangedBy(arrowScrollRows), nil
 		}
 	case "down":
-		if m.input.Height() == 1 {
+		cursorRow := m.input.LineInfo()
+		if m.input.Line() == m.input.LineCount()-1 && cursorRow.RowOffset == cursorRow.Height-1 {
 			return m.withRowsBelowViewChangedBy(-arrowScrollRows), nil
 		}
 	case "end":
 		return m.withRowsBelowViewChangedBy(-m.rowsBelowView), nil
 	case "ctrl+y":
-		if m.newestCodeBlock == nil {
-			m.copyStatus = workingStyle.Render("No code block to copy.")
+		if len(m.codeBlocks) == 0 {
+			m.copyStatus = m.appearance.workingStyle.Render("No code block to copy.")
 			return m, nil
 		}
-		replyBlocks, err := CodeBlocks(m.entries[m.newestCodeBlock.entry].Text)
-		if err != nil {
-			m.status = errorStyle.Render(err.Error())
-			return m, nil
-		}
-		m.copyStatus = workingStyle.Render("Copied the last code block.")
-		return m, tea.SetClipboard(replyBlocks[m.newestCodeBlock.block].code)
+		newest := len(m.codeBlocks) - 1
+		m.copyMode = &copyMode{picked: newest, marked: []int{}}
+		return m.withEntryRedrawn(m.codeBlocks[newest].entry).withPickedCodeBlockInView(), nil
 	case "enter":
 		prompt := m.InputText()
 		if prompt == "" {
@@ -478,10 +692,170 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 			return claudeKeysSentMsg{err: m.agent.Interrupt()}
 		}
 	}
+	formerInput := m.input.Value()
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
 	// the entries take the rows the input gives up
-	return m.withVisibleRowsDrawn(), inputCmd
+	return m.withSlashMenuFollowingInput(formerInput).withVisibleRowsDrawn(), inputCmd
+}
+
+// withSlashMenuFollowingInput opens the menu on a / typed into the empty input when it has a command to list, and
+// closes it once the input no longer starts with / or holds a space. A changed query selects the best match.
+func (m zenModel) withSlashMenuFollowingInput(formerInput string) zenModel {
+	input := m.input.Value()
+	switch {
+	case m.slashMenu == nil:
+		hasCommands := len(m.slashCommands) > 0 || len(m.slashUses) > 0
+		if formerInput == "" && input == "/" && hasCommands {
+			m.slashMenu = &slashMenu{selected: 0, openedAt: time.Now()}
+		}
+	case !strings.HasPrefix(input, "/") || strings.ContainsFunc(input, unicode.IsSpace):
+		m.slashMenu = nil
+	case input != formerInput:
+		m.slashMenu = &slashMenu{selected: 0, openedAt: m.slashMenu.openedAt}
+	}
+	return m
+}
+
+// withSlashMenuKey handles the keys the open menu takes, and reports false for the others, which go to the input.
+func (m zenModel) withSlashMenuKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd, bool) {
+	matches := m.slashMatches()
+	switch msg.String() {
+	case "up":
+		m.slashMenu = &slashMenu{selected: max(m.slashMenu.selected-1, 0), openedAt: m.slashMenu.openedAt}
+		return m, nil, true
+	case "down":
+		m.slashMenu = &slashMenu{selected: max(min(m.slashMenu.selected+1, len(matches)-1), 0),
+			openedAt: m.slashMenu.openedAt}
+		return m, nil, true
+	case "tab":
+		if len(matches) == 0 {
+			return m, nil, true
+		}
+		m.input.SetValue("/" + matches[m.slashMenu.selected].command.Name + " ")
+		m.slashMenu = nil
+		return m.withVisibleRowsDrawn(), nil, true
+	case "enter":
+		if len(matches) > 0 {
+			m.input.SetValue("/" + matches[m.slashMenu.selected].command.Name)
+		}
+		m.slashMenu = nil
+		model, cmd := m.withKey(msg)
+		return model, cmd, true
+	case "esc":
+		m.slashMenu = nil
+		return m.withVisibleRowsDrawn(), nil, true
+	}
+	return m, nil, false
+}
+
+// slashMatches are the commands the open menu lists for the input after its /.
+func (m zenModel) slashMatches() []slashMatch {
+	return RankedSlashCommands(m.slashCommands, m.slashUses, strings.TrimPrefix(m.input.Value(), "/"),
+		m.slashMenu.openedAt)
+}
+
+// withCopyModeKey leaves the input and Claude alone: a key copy mode does not use does nothing.
+func (m zenModel) withCopyModeKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	picked := m.copyMode.picked
+	switch msg.String() {
+	case "up":
+		if picked > 0 {
+			return m.withCodeBlockPicked(picked - 1), nil
+		}
+	case "down":
+		if picked < len(m.codeBlocks)-1 {
+			return m.withCodeBlockPicked(picked + 1), nil
+		}
+	case "space":
+		marked := slices.Clone(m.copyMode.marked)
+		if at := slices.Index(marked, picked); at >= 0 {
+			marked = slices.Delete(marked, at, at+1)
+		} else {
+			marked = append(marked, picked)
+		}
+		m.copyMode = &copyMode{picked: picked, marked: marked}
+		return m.withEntryRedrawn(m.codeBlocks[picked].entry), nil
+	case "enter":
+		return m.withCodeBlocksCopied()
+	case "esc":
+		return m.withCopyModeClosed(), nil
+	}
+	return m, nil
+}
+
+func (m zenModel) withCodeBlockPicked(index int) zenModel {
+	formerEntry := m.codeBlocks[m.copyMode.picked].entry
+	m.copyMode = &copyMode{picked: index, marked: m.copyMode.marked}
+	return m.withEntryRedrawn(formerEntry).withEntryRedrawn(m.codeBlocks[index].entry).withPickedCodeBlockInView()
+}
+
+// withCodeBlocksCopied copies the marked blocks oldest first, or the picked block when none is marked, and closes copy
+// mode.
+func (m zenModel) withCodeBlocksCopied() (zenModel, tea.Cmd) {
+	copiedBlocks := slices.Sorted(slices.Values(m.copyMode.marked))
+	if len(copiedBlocks) == 0 {
+		copiedBlocks = []int{m.copyMode.picked}
+	}
+	codes := []string{}
+	for _, index := range copiedBlocks {
+		position := m.codeBlocks[index]
+		replyBlocks, err := CodeBlocks(m.entries[position.entry].Text)
+		if err != nil {
+			m.status = m.appearance.errorStyle.Render(err.Error())
+			return m.withCopyModeClosed(), nil
+		}
+		codes = append(codes, replyBlocks[position.block].code)
+	}
+	if len(codes) == 1 {
+		m.copyStatus = m.appearance.workingStyle.Render("Copied the code block.")
+	} else {
+		m.copyStatus = m.appearance.workingStyle.Render(fmt.Sprintf("Copied %d code blocks.", len(codes)))
+	}
+	return m.withCopyModeClosed(), tea.SetClipboard(strings.Join(codes, "\n\n"))
+}
+
+func (m zenModel) withCopyModeClosed() zenModel {
+	framedEntries := []int{m.codeBlocks[m.copyMode.picked].entry}
+	for _, index := range m.copyMode.marked {
+		framedEntries = append(framedEntries, m.codeBlocks[index].entry)
+	}
+	m.copyMode = nil
+	for _, entry := range framedEntries {
+		m = m.withEntryRedrawn(entry)
+	}
+	return m.withVisibleRowsDrawn()
+}
+
+// withPickedCodeBlockInView scrolls the least that shows the picked block's whole frame, or puts its top rule at the
+// top of the view when the frame is taller than the view.
+func (m zenModel) withPickedCodeBlockInView() zenModel {
+	entry := m.codeBlocks[m.copyMode.picked].entry
+	rowsUnderEntry := len(m.earlyPromptRows())
+	for index := len(m.entries) - 1; index > entry; index-- {
+		m = m.withEntryDrawn(index)
+		rowsUnderEntry += len(m.entryRows[index])
+	}
+	m = m.withEntryDrawn(entry)
+	rows := m.entryRows[entry]
+	// only the picked frame has heavy corners, and a frame's rules are the rows not indented
+	pickedTopRule, pickedBottomRule := " "+pickedFrameRules.topLeft, " "+pickedFrameRules.bottomLeft
+	topRule := slices.IndexFunc(rows, func(row string) bool { return strings.HasPrefix(ansi.Strip(row), pickedTopRule) })
+	if topRule < 0 {
+		return m.withVisibleRowsDrawn()
+	}
+	frameHeight := slices.IndexFunc(rows[topRule:], func(row string) bool {
+		return strings.HasPrefix(ansi.Strip(row), pickedBottomRule)
+	}) + 1
+	rowsUnderFrame := rowsUnderEntry + len(rows) - topRule - frameHeight
+	height := m.entriesHeight()
+	switch {
+	case frameHeight <= height && rowsUnderFrame < m.rowsBelowView:
+		m.rowsBelowView = rowsUnderFrame
+	case frameHeight > height || rowsUnderFrame+frameHeight > m.rowsBelowView+height:
+		m.rowsBelowView = rowsUnderFrame + frameHeight - height
+	}
+	return m.withVisibleRowsDrawn()
 }
 
 // withPromptPutBack shows the prompt's pastes and those typed since as labels again, renumbered in order.
@@ -497,6 +871,16 @@ func (m zenModel) withPromptPutBack(prompt string, pastes []string) zenModel {
 
 func (m zenModel) InputText() string {
 	return claudecode.TextWithPastesExpanded(m.input.Value(), m.pastes)
+}
+
+// withDraftRestored shows the draft's pastes as their labels, as when they were pasted, and draftErr on the status line.
+func (m zenModel) withDraftRestored(draft Draft, draftErr error) zenModel {
+	if draftErr != nil {
+		m.draftStatus = m.appearance.errorStyle.Render(draftErr.Error())
+	}
+	m.input.SetValue(draft.Text)
+	m.pastes = draft.Pastes
+	return m
 }
 
 func (m zenModel) withPasteInserted(content string) (zenModel, tea.Cmd) {
@@ -536,9 +920,8 @@ func (m zenModel) withInputSent(prompt string) zenModel {
 	m.pastes = nil
 	m.input.Reset()
 	m = m.withVisibleRowsDrawn()
-	// Claude records a slash command as a hidden <command-name> record, which would never replace the band.
 	bandText := strings.TrimSpace(prompt)
-	if bandText == "" || strings.HasPrefix(bandText, "/") {
+	if bandText == "" {
 		return m
 	}
 	return m.withEarlyPromptAdded(earlyPrompt{text: bandText, pastes: pastes})
@@ -547,7 +930,7 @@ func (m zenModel) withInputSent(prompt string) zenModel {
 // withSize redraws every entry when the width changes, since prompts and markdown wrap to it.
 func (m zenModel) withSize(width int, height int) zenModel {
 	if width != m.width {
-		replyRenderer, err := NewReplyRenderer(width)
+		replyRenderer, err := NewReplyRenderer(m.appearance, width)
 		if err != nil {
 			m.fatal = err
 			return m
@@ -567,17 +950,18 @@ func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperation
 	firstNew := len(m.entries)
 	m.entries = append(m.entries, entries...)
 	m.entryRows = append(m.entryRows, make([][]string, len(entries))...)
-	newPosition, err := NewestCodeBlockPosition(entries)
+	newPositions, err := CodeBlockPositions(entries)
 	if err != nil {
-		m.status = errorStyle.Render(err.Error())
+		m.status = m.appearance.errorStyle.Render(err.Error())
 	}
-	if newPosition != nil {
-		formerPosition := m.newestCodeBlock
-		m.newestCodeBlock = &codeBlockPosition{entry: firstNew + newPosition.entry, block: newPosition.block}
+	if len(newPositions) > 0 {
+		formerCodeBlocks := m.codeBlocks
+		for _, position := range newPositions {
+			m.codeBlocks = append(m.codeBlocks, codeBlockPosition{entry: firstNew + position.entry, block: position.block})
+		}
 		// the former newest block's frame loses the copy hint, in the same number of rows
-		if formerPosition != nil && m.entryRows[formerPosition.entry] != nil {
-			m.entryRows[formerPosition.entry] = nil
-			m = m.withEntryDrawn(formerPosition.entry)
+		if len(formerCodeBlocks) > 0 {
+			m = m.withEntryRedrawn(formerCodeBlocks[len(formerCodeBlocks)-1].entry)
 		}
 	}
 	if m.rowsBelowView > 0 {
@@ -591,7 +975,7 @@ func (m zenModel) withEntries(entries []claudecode.DialogueEntry, queueOperation
 		for ; nextOperation < len(queueOperations) && queueOperations[nextOperation].entriesBefore <= index; nextOperation++ {
 			m = m.withQueueOperation(queueOperations[nextOperation].QueueOperation)
 		}
-		if entry.Kind != claudecode.PromptEntry {
+		if entry.Kind != claudecode.PromptEntry && entry.Kind != claudecode.CommandEntry {
 			continue
 		}
 		if bandIndex := m.earlyPromptIndex(entry.Text); bandIndex >= 0 {
@@ -697,7 +1081,8 @@ func (m zenModel) earlyPromptRows() []string {
 		if early.queued {
 			note = queuedNote
 		}
-		rows = append(rows, PromptEntryRows(claudecode.TextWithPastesCollapsed(early.text, early.pastes), note, m.width)...)
+		rows = append(rows, PromptEntryRows(claudecode.TextWithPastesCollapsed(early.text, early.pastes), note, m.width,
+			m.appearance)...)
 	}
 	return rows
 }
@@ -708,35 +1093,51 @@ func (m zenModel) withRowsBelowViewChangedBy(rows int) zenModel {
 }
 
 func (m zenModel) entriesHeight() int {
-	return max(m.height-m.rowsAboveInput()-m.input.Height()-m.rowsBelowInput(), 0)
+	return max(m.height-m.rowsAboveInput()-m.input.Height()-len(m.rowsBelowInput()), 0)
 }
 
 // A shown status gets a blank row above it, between it and the newest entry.
 func (m zenModel) rowsAboveInput() int {
-	if m.shownStatus() == "" {
+	shownStatus := m.shownStatus()
+	if shownStatus == "" {
 		return 2
 	}
-	return 3
+	return 2 + len(strings.Split(shownStatus, "\n"))
 }
 
 func (m zenModel) shownStatus() string {
+	if m.copyMode != nil {
+		return m.appearance.workingStyle.Render(copyModeHint)
+	}
 	if m.copyStatus != "" {
 		return m.copyStatus
+	}
+	if m.agentPickerShown {
+		return statusLine(AgentBlocked, m.turn, m.now, m.width, m.appearance, m.claudeScreenKey)
+	}
+	if m.draftStatus != "" {
+		return m.draftStatus
 	}
 	if m.status != "" {
 		return m.status
 	}
 	if m.endedTurnRow != "" {
-		return doneStyle.Render(m.endedTurnRow)
+		return m.appearance.doneStyle.Render(m.endedTurnRow)
 	}
-	return statusLine(m.agentStatus, m.turn, m.now, m.width)
+	return statusLine(m.agentStatus, m.turn, m.now, m.width, m.appearance, m.claudeScreenKey)
 }
 
-func (m zenModel) rowsBelowInput() int {
-	if m.claudeStatusLine == "" {
-		return 0
+// rowsBelowInput are the open slash menu's rows, or Claude's status line, under the separator that closes the input.
+func (m zenModel) rowsBelowInput() []string {
+	separator := m.appearance.separatorStyle.Render(strings.Repeat(m.appearance.separatorLine, m.width))
+	if m.slashMenu != nil {
+		return append([]string{separator}, slashMenuRows(m.slashMatches(), m.slashMenu.selected, m.width,
+			m.appearance)...)
 	}
-	return rowsBelowInputWithStatusLine
+	if m.claudeStatusLine == "" {
+		return []string{}
+	}
+	return []string{separator, " " + ansi.Truncate(m.claudeStatusLine, max(m.width-1, 0), "") + ansi.ResetStyle}
 }
 
 // withVisibleRowsDrawn draws entries from the newest back until the view is covered, so a start on a long tail
@@ -762,24 +1163,49 @@ func (m zenModel) withEntryDrawn(index int) zenModel {
 	if m.entryRows[index] != nil {
 		return m
 	}
-	copyHintBlock := -1
-	if m.newestCodeBlock != nil && m.newestCodeBlock.entry == index {
-		copyHintBlock = m.newestCodeBlock.block
-	}
-	rows, err := EntryRows(m.entries[index], copyHintBlock, m.width, m.replyRenderer)
+	rows, err := EntryRows(m.entries[index], m.codeFrames(index), m.width, m.replyRenderer, m.appearance)
 	if err != nil {
-		m.status = errorStyle.Render(err.Error())
+		m.status = m.appearance.errorStyle.Render(err.Error())
 		rows = []string{}
 	}
 	m.entryRows[index] = rows
 	return m
 }
 
+// withEntryRedrawn redraws an entry drawn before, in the same number of rows, and leaves one not drawn yet to be drawn
+// when it shows.
+func (m zenModel) withEntryRedrawn(index int) zenModel {
+	if m.entryRows[index] == nil {
+		return m
+	}
+	m.entryRows = slices.Clone(m.entryRows)
+	m.entryRows[index] = nil
+	return m.withEntryDrawn(index)
+}
+
+// codeFrames holds how each code frame of the entry at index is drawn, by its number in the entry's reply.
+func (m zenModel) codeFrames(index int) map[int]codeFrame {
+	frames := map[int]codeFrame{}
+	for blockIndex, position := range m.codeBlocks {
+		if position.entry != index {
+			continue
+		}
+		frame := codeFrame{copyHint: blockIndex == len(m.codeBlocks)-1}
+		if m.copyMode != nil {
+			frame.picked = blockIndex == m.copyMode.picked
+			frame.marked = slices.Contains(m.copyMode.marked, blockIndex)
+		}
+		frames[position.block] = frame
+	}
+	return frames
+}
+
 func (m zenModel) View() tea.View {
 	var view tea.View
 	switch {
 	case m.fatal != nil:
-		view = tea.NewView(m.fatal.Error())
+		// wrapped, since a terminal cuts a row at the pane's edge, and a config error names the field after the file
+		view = tea.NewView(lipgloss.NewStyle().Width(m.width).Render(m.fatal.Error()))
 	case m.width == 0:
 		view = tea.NewView("")
 	default:
@@ -798,29 +1224,37 @@ func (m zenModel) screen() string {
 	}
 	end := max(len(rowsOldestFirst)-m.rowsBelowView, 0)
 	visible := rowsOldestFirst[max(end-height, 0):end]
-	rows := make([]string, height-len(visible), height+m.rowsAboveInput()+m.input.Height()+m.rowsBelowInput())
+	rows := make([]string, height-len(visible), height+m.rowsAboveInput()+m.input.Height()+len(m.rowsBelowInput()))
 	rows = append(rows, visible...)
 	shownStatus := m.shownStatus()
 	if shownStatus != "" {
 		rows = append(rows, "")
 	}
-	separator := separatorStyle.Render(strings.Repeat("─", m.width))
-	rows = append(rows, " "+shownStatus, separator)
+	separator := m.appearance.separatorStyle.Render(strings.Repeat(m.appearance.separatorLine, m.width))
+	for _, statusRow := range strings.Split(shownStatus, "\n") {
+		rows = append(rows, " "+statusRow)
+	}
+	rows = append(rows, separator)
 	for _, inputRow := range strings.Split(m.input.View(), "\n") {
 		rows = append(rows, " "+inputRow)
 	}
-	if m.claudeStatusLine != "" {
-		rows = append(rows, separator, " "+ansi.Truncate(m.claudeStatusLine, max(m.width-1, 0), "")+ansi.ResetStyle)
-	}
+	rows = append(rows, m.rowsBelowInput()...)
 	return strings.Join(rows, "\n")
+}
+
+// Draft is the zen input's unsent text as shown, with each paste as its label, and the pastes, numbered from 1 in
+// order.
+type Draft struct {
+	Text   string   `json:"text"`
+	Pastes []string `json:"pastes"`
 }
 
 // draftSavingView saves the zen input's unsent text with saveDraft after each update, so turning zen mode off can move
 // it into Claude's input after closing the zen pane.
 type draftSavingView struct {
 	zen        zenModel
-	saveDraft  func(draft string) error
-	savedDraft string
+	saveDraft  func(draft Draft) error
+	savedDraft Draft
 }
 
 func (v draftSavingView) Init() tea.Cmd {
@@ -834,12 +1268,12 @@ func (v draftSavingView) View() tea.View {
 func (v draftSavingView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	updated, cmd := v.zen.Update(msg)
 	v.zen = updated.(zenModel)
-	draft := v.zen.InputText()
-	if draft == v.savedDraft {
+	draft := Draft{Text: v.zen.input.Value(), Pastes: v.zen.pastes}
+	if draft.Text == v.savedDraft.Text && slices.Equal(draft.Pastes, v.savedDraft.Pastes) {
 		return v, cmd
 	}
 	if err := v.saveDraft(draft); err != nil {
-		v.zen.status = errorStyle.Render(err.Error())
+		v.zen.status = v.zen.appearance.errorStyle.Render(err.Error())
 		return v, cmd
 	}
 	v.savedDraft = draft

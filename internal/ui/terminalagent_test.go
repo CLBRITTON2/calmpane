@@ -8,8 +8,6 @@ import (
 	"testing"
 
 	tea "charm.land/bubbletea/v2"
-
-	"github.com/CLBRITTON2/calmpane/claudecode"
 )
 
 type terminalAgentRecorder struct {
@@ -48,6 +46,7 @@ func (r *terminalAgentRecorder) Exited() <-chan struct{} {
 
 func TestAgentScreenSwitchingView(t *testing.T) {
 	t.Run("toggleKeyShowsAgentScreenWithItsCursorAndBack", toggleKeyShowsAgentScreenWithItsCursorAndBack)
+	t.Run("configuredClaudeScreenKeyShowsAgentScreenAndAltXDoesNot", configuredClaudeScreenKeyShowsAgentScreenAndAltXDoesNot)
 	t.Run("keysAndPastesGoToAgentOnlyWhileItsScreenShows", keysAndPastesGoToAgentOnlyWhileItsScreenShows)
 	t.Run("windowSizeResizesAgent", windowSizeResizesAgent)
 	t.Run("agentInputFailureShowsOnZenStatusLine", agentInputFailureShowsOnZenStatusLine)
@@ -56,8 +55,7 @@ func TestAgentScreenSwitchingView(t *testing.T) {
 }
 
 func newAgentScreenSwitchingView(agent *terminalAgentRecorder) tea.Model {
-	return agentScreenSwitchingView{zen: zenModel{agent: agent, entries: []claudecode.DialogueEntry{},
-		entryRows: [][]string{}, input: NewPromptInput()}, agent: agent, showsAgentScreen: false}
+	return agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+x", ""), agent: agent, showsAgentScreen: false}
 }
 
 func toggleKeyShowsAgentScreenWithItsCursorAndBack(t *testing.T) {
@@ -81,6 +79,20 @@ func toggleKeyShowsAgentScreenWithItsCursorAndBack(t *testing.T) {
 	}
 	if len(agent.calls) != 0 {
 		t.Errorf("agent calls = %q, want alt+x sent to no agent", agent.calls)
+	}
+}
+
+func configuredClaudeScreenKeyShowsAgentScreenAndAltXDoesNot(t *testing.T) {
+	agent := &terminalAgentRecorder{screen: "Claude's own screen"}
+	var view tea.Model = agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+z", ""), agent: agent,
+		showsAgentScreen: false}
+	view, _ = view.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt})
+	if view.(agentScreenSwitchingView).showsAgentScreen {
+		t.Error("alt+x shows the agent's screen with alt+z as the Claude screen key")
+	}
+	view, _ = view.Update(tea.KeyPressMsg{Code: 'z', Mod: tea.ModAlt})
+	if view.View().Content != agent.screen {
+		t.Errorf("view after alt+z = %q, want the agent's screen", view.View().Content)
 	}
 }
 

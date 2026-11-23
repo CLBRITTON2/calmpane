@@ -22,19 +22,8 @@ type InputBox struct {
 // scrolled past its top, which gives no draft. A capture drops the space at a soft wrap, so the rows are joined with
 // one.
 func InputBoxOnScreen(screen string) InputBox {
-	rows := strings.Split(screen, "\n")
-	ruleRows := []int{}
-	for index, row := range rows {
-		text := strings.TrimRight(ansi.Strip(row), " \r")
-		if strings.HasPrefix(text, "─") && strings.HasSuffix(text, "─") {
-			ruleRows = append(ruleRows, index)
-		}
-	}
-	if len(ruleRows) < 2 {
-		return InputBox{}
-	}
-	boxRows := rows[ruleRows[len(ruleRows)-2]+1 : ruleRows[len(ruleRows)-1]]
-	if len(boxRows) == 0 || !strings.HasPrefix(ansi.Strip(boxRows[0]), claudeInputMarker) {
+	boxRows := inputBoxRows(screen)
+	if boxRows == nil {
 		return InputBox{}
 	}
 	rowTexts := []string{}
@@ -53,6 +42,32 @@ func InputBoxOnScreen(screen string) InputBox {
 		return InputBox{}
 	}
 	return InputBox{Draft: strings.Join(rowTexts, " "), Rows: len(boxRows)}
+}
+
+// InputBoxShown reports whether the screen shows Claude Code's input box, which a picker or dialog such as /model's
+// takes the place of.
+func InputBoxShown(screen string) bool {
+	return inputBoxRows(screen) != nil
+}
+
+// inputBoxRows holds the rows between the last two rules, nil unless the first of them starts with the input marker.
+func inputBoxRows(screen string) []string {
+	rows := strings.Split(screen, "\n")
+	ruleRows := []int{}
+	for index, row := range rows {
+		text := strings.TrimRight(ansi.Strip(row), " \r")
+		if strings.HasPrefix(text, "─") && strings.HasSuffix(text, "─") {
+			ruleRows = append(ruleRows, index)
+		}
+	}
+	if len(ruleRows) < 2 {
+		return nil
+	}
+	boxRows := rows[ruleRows[len(ruleRows)-2]+1 : ruleRows[len(ruleRows)-1]]
+	if len(boxRows) == 0 || !strings.HasPrefix(ansi.Strip(boxRows[0]), claudeInputMarker) {
+		return nil
+	}
+	return boxRows
 }
 
 // drawsUndimmedText reports whether row draws a character other than a space without dim. herdr 0.9.5 writes each SGR

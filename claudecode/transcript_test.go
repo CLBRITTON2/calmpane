@@ -112,6 +112,39 @@ func dialogueEntriesShowOnlyDialogue(t *testing.T) {
 			line: `{"type":"system","subtype":"away_summary","content":"We're renaming the widget. Next, the tests."}`,
 		},
 		{
+			name: "slash command shown as its name and arguments",
+			line: `{"type":"user","message":{"role":"user","content":"<command-name>/effort</command-name>\n` +
+				`<command-message>effort</command-message>\n<command-args>high</command-args>"}}`,
+			want: []DialogueEntry{{Kind: CommandEntry, Text: "/effort high"}},
+		},
+		{
+			name: "slash command with empty arguments shown as its name",
+			line: `{"type":"user","message":{"role":"user","content":"<command-name>/usage</command-name>\n` +
+				`<command-message>usage</command-message>\n<command-args></command-args>"}}`,
+			want: []DialogueEntry{{Kind: CommandEntry, Text: "/usage"}},
+		},
+		{
+			name: "clear command hidden",
+			line: `{"type":"user","message":{"role":"user","content":"<command-name>/clear</command-name>\n` +
+				`<command-message>clear</command-message>\n<command-args></command-args>"}}`,
+		},
+		{
+			name: "local_command system record shown as the command it holds",
+			line: `{"type":"system","subtype":"local_command","content":"<command-name>/model</command-name>\n` +
+				`<command-message>model</command-message>\n<command-args></command-args>"}`,
+			want: []DialogueEntry{{Kind: CommandEntry, Text: "/model"}},
+		},
+		{
+			name: "local_command output shown without its color codes",
+			line: `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Set effort level to ` +
+				`\u001b[1mhigh\u001b[22m</local-command-stdout>"}`,
+			want: []DialogueEntry{{Kind: CommandOutputEntry, Text: "Set effort level to high"}},
+		},
+		{
+			name: "empty local command output hidden",
+			line: `{"type":"user","message":{"role":"user","content":"<local-command-stdout></local-command-stdout>"}}`,
+		},
+		{
 			name: "file-history-snapshot record hidden",
 			line: `{"type":"file-history-snapshot","messageId":"m1","snapshot":{}}`,
 		},

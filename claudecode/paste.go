@@ -2,6 +2,8 @@ package claudecode
 
 import (
 	"fmt"
+	"regexp"
+	"slices"
 	"strings"
 	"unicode/utf8"
 )
@@ -30,6 +32,14 @@ func PasteLabel(number int, paste string) string {
 	return fmt.Sprintf("[Pasted text #%d +%d lines]", number, lineBreaks)
 }
 
+var pasteLabelPattern = regexp.MustCompile(`\[Pasted text #\d+( \+\d+ lines)?\]`)
+
+// HoldsPasteLabel reports whether text holds a label in the form PasteLabel writes, which stands for a paste the text
+// itself does not hold.
+func HoldsPasteLabel(text string) bool {
+	return pasteLabelPattern.MatchString(text)
+}
+
 // TextWithPastesCollapsed replaces the first occurrence of each paste, numbered from 1, with its label.
 func TextWithPastesCollapsed(text string, pastes []string) string {
 	for index, paste := range pastes {
@@ -40,8 +50,46 @@ func TextWithPastesCollapsed(text string, pastes []string) string {
 
 // TextWithPastesExpanded replaces the first occurrence of each paste's label, numbered from 1, with the paste.
 func TextWithPastesExpanded(text string, pastes []string) string {
-	for index, paste := range pastes {
-		text = strings.Replace(text, PasteLabel(index+1, paste), paste, 1)
+	var expanded strings.Builder
+	for _, part := range TextParts(text, pastes) {
+		expanded.WriteString(part.Text)
 	}
-	return text
+	return expanded.String()
+}
+
+// TextPart is a run of typed text, or the paste a label stands for.
+type TextPart struct {
+	Text    string
+	IsPaste bool
+}
+
+// TextParts splits text at the first occurrence of each paste's label, numbered from 1, in the order they occur. A
+// paste whose label the text lacks has no part.
+func TextParts(text string, pastes []string) []TextPart {
+	type labelPosition struct {
+		start int
+		end   int
+		paste string
+	}
+	labels := []labelPosition{}
+	for index, paste := range pastes {
+		label := PasteLabel(index+1, paste)
+		if start := strings.Index(text, label); start >= 0 {
+			labels = append(labels, labelPosition{start: start, end: start + len(label), paste: paste})
+		}
+	}
+	slices.SortFunc(labels, func(first labelPosition, second labelPosition) int { return first.start - second.start })
+	parts := []TextPart{}
+	typedStart := 0
+	for _, label := range labels {
+		if label.start > typedStart {
+			parts = append(parts, TextPart{Text: text[typedStart:label.start]})
+		}
+		parts = append(parts, TextPart{Text: label.paste, IsPaste: true})
+		typedStart = label.end
+	}
+	if typedStart < len(text) {
+		parts = append(parts, TextPart{Text: text[typedStart:]})
+	}
+	return parts
 }

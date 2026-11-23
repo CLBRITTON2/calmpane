@@ -27,16 +27,11 @@ type Pane struct {
 	Focused      bool              `json:"focused"`
 	AgentStatus  string            `json:"agent_status"`
 	Tokens       map[string]string `json:"tokens"`
+	Cwd          string            `json:"cwd"`
 	AgentSession *struct {
 		Agent string `json:"agent"`
 		Value string `json:"value"`
 	} `json:"agent_session"`
-}
-
-type errorReply struct {
-	Error struct {
-		Code string `json:"code"`
-	} `json:"error"`
 }
 
 var ErrAgentBlocked = errors.New("agent_blocked")
@@ -47,17 +42,13 @@ type CLI struct {
 }
 
 // subcommand is split on spaces, so an argument with a space goes in arguments. A failure names only the subcommand,
-// as the zen view's status line shows it: the arguments of agent prompt hold the whole prompt.
+// as the zen view's status line shows it.
 func (h CLI) run(subcommand string, arguments ...string) ([]byte, error) {
 	var stdout, stderr bytes.Buffer
 	command := exec.Command(h.Binary, append(strings.Fields(subcommand), arguments...)...)
 	command.Stdout = &stdout
 	command.Stderr = &stderr
 	if err := command.Run(); err != nil {
-		var reply errorReply
-		if json.Unmarshal(stderr.Bytes(), &reply) == nil && reply.Error.Code == ErrAgentBlocked.Error() {
-			return nil, ErrAgentBlocked
-		}
 		return nil, fmt.Errorf("herdr %s failed: %w: %s", subcommand, err, strings.TrimSpace(stderr.String()))
 	}
 	return stdout.Bytes(), nil
@@ -110,11 +101,6 @@ func (h CLI) Agents() ([]Pane, error) {
 		return nil, fmt.Errorf("decode herdr agent list reply %q: %w", output, err)
 	}
 	return reply.Result.Agents, nil
-}
-
-func (h CLI) PromptAgent(paneID string, prompt string) error {
-	_, err := h.run("agent prompt", paneID, prompt)
-	return err
 }
 
 func (h CLI) SendKeys(paneID string, keys []string) error {
@@ -176,7 +162,7 @@ func (h CLI) StyledScreen(paneID string) (string, error) {
 	return string(output), err
 }
 
-func (h CLI) SendText(paneID string, text string) error {
-	_, err := h.run("pane send-text", paneID, text)
+func (h CLI) ShowSilentNotification(title string, body string) error {
+	_, err := h.run("notification show", title, "--body", body, "--sound", "none")
 	return err
 }

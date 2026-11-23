@@ -1,6 +1,7 @@
 package zenmode
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -8,6 +9,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/CLBRITTON2/calmpane/claudecode"
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
@@ -19,14 +21,19 @@ func (m Mode) DraftFile(claudePaneID string) string {
 }
 
 // MoveDraftIntoAgent types the draft into the Claude pane's input. herdr sends a newline as a line feed, which Claude
-// Code's input takes as a new line rather than a submit.
-func MoveDraftIntoAgent(cli herdr.CLI, draftFile string, claudePaneID string) error {
+// Code's input takes as a new line rather than a submit. Each paste goes as a bracketed paste, so Claude shows its own
+// label for it.
+func MoveDraftIntoAgent(api herdr.API, draftFile string, claudePaneID string) error {
 	draft, err := SavedDraft(draftFile)
 	if err != nil {
 		return err
 	}
-	if len(draft) > 0 {
-		if err := cli.SendText(claudePaneID, draft); err != nil {
+	for _, part := range claudecode.TextParts(draft.Text, draft.Pastes) {
+		text := part.Text
+		if part.IsPaste {
+			text = "\x1b[200~" + text + "\x1b[201~"
+		}
+		if err := api.SendText(claudePaneID, text); err != nil {
 			return err
 		}
 	}
@@ -50,10 +57,10 @@ func MoveAgentInputIntoDraft(cli herdr.CLI, claudePane herdr.Pane, draftFile str
 	if err != nil {
 		return err
 	}
-	if savedDraft == "" {
-		return WriteWhole(draftFile, agentInput)
+	if savedDraft.Text == "" {
+		return WriteDraft(draftFile, ui.Draft{Text: agentInput, Pastes: savedDraft.Pastes})
 	}
-	return WriteWhole(draftFile, savedDraft+"\n"+agentInput)
+	return WriteDraft(draftFile, ui.Draft{Text: savedDraft.Text + "\n" + agentInput, Pastes: savedDraft.Pastes})
 }
 
 // TakeAgentInput empties the unsent text of the input box in Claude pane claudePaneID and returns that text.
@@ -63,23 +70,34 @@ func TakeAgentInput(cli herdr.CLI, claudePaneID string) (string, error) {
 	return ui.TakeClaudeInput("Claude's input in pane "+claudePaneID, styledScreen, sendCtrlU)
 }
 
-// SavedDraft is empty when there is no draft file.
-func SavedDraft(draftFile string) (string, error) {
-	draft, err := os.ReadFile(draftFile)
+// SavedDraft is empty when the draft file is missing or empty.
+func SavedDraft(draftFile string) (ui.Draft, error) {
+	content, err := os.ReadFile(draftFile)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return ui.Draft{}, nil
 	}
 	if err != nil {
-		return "", fmt.Errorf("read the zen draft: %w", err)
+		return ui.Draft{}, fmt.Errorf("Cannot read the draft %s: %w", draftFile, err)
 	}
-	return string(draft), nil
+	if len(content) == 0 {
+		return ui.Draft{}, nil
+	}
+	var draft ui.Draft
+	if err := json.Unmarshal(content, &draft); err != nil {
+		return ui.Draft{}, fmt.Errorf("Cannot read the draft %s: %w", draftFile, err)
+	}
+	return draft, nil
 }
 
-// WriteWhole writes text under another name and renames it over file, so a reader never sees half of it.
-func WriteWhole(file string, text string) error {
-	staging := file + ".tmp"
-	if err := os.WriteFile(staging, []byte(text), 0o644); err != nil {
+// WriteDraft writes the draft under another name and renames it over draftFile, so a reader never sees half of it.
+func WriteDraft(draftFile string, draft ui.Draft) error {
+	content, err := json.Marshal(draft)
+	if err != nil {
+		return fmt.Errorf("encode the draft %s: %w", draftFile, err)
+	}
+	staging := draftFile + ".tmp"
+	if err := os.WriteFile(staging, content, 0o644); err != nil {
 		return err
 	}
-	return os.Rename(staging, file)
+	return os.Rename(staging, draftFile)
 }

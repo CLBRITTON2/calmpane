@@ -37,8 +37,8 @@ func exitWithHelperError(helperErr error) {
 }
 
 // fakeClaudeInputLogEnv makes the test binary act as Claude Code in a pseudo-console: it draws an input box holding
-// fakeClaudeDraft, appends each byte it reads to the file the variable names, empties the box on ctrl+u, and exits
-// with fakeClaudeExitCode on ctrl+d.
+// fakeClaudeDraft, appends each byte it reads to the file the variable names, empties the box on ctrl+u, draws a
+// picker in its place on ctrl+p, and exits with fakeClaudeExitCode on ctrl+d.
 const fakeClaudeInputLogEnv = "ZEN_FAKE_CLAUDE_INPUT_LOG"
 
 const fakeClaudeDraft = "fix the tests"
@@ -79,6 +79,11 @@ func runFakeClaude(inputLog string) (err error) {
 				return err
 			}
 		}
+		if strings.Contains(string(input[:length]), "\x10") {
+			if _, err := fmt.Fprint(os.Stdout, "\x1b[2J\x1b[HSelect model\r\n❯ 1. Default\r\n"); err != nil {
+				return err
+			}
+		}
 	}
 }
 
@@ -98,6 +103,7 @@ func TestAgent(t *testing.T) {
 	t.Run("sendKeyAndPasteReachClaudeThroughEmulator", sendKeyAndPasteReachClaudeThroughEmulator)
 	t.Run("waitForSessionIDAndSendKeyFailOnceClaudeExits", waitForSessionIDAndSendKeyFailOnceClaudeExits)
 	t.Run("takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft", takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft)
+	t.Run("inputBoxShownUntilPickerTakesItsPlace", inputBoxShownUntilPickerTakesItsPlace)
 	t.Run("statusIsLastWholeHookStateAndUnknownBeforeFirstHook", statusIsLastWholeHookStateAndUnknownBeforeFirstHook)
 	t.Run("resizeSizesClaudesScreen", resizeSizesClaudesScreen)
 	t.Run("closeEndsClaudeAndExitedCloses", closeEndsClaudeAndExitedCloses)
@@ -243,6 +249,20 @@ func takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft(t *testing.T) {
 		t.Errorf("TakeInput = %q, want %q", draft, fakeClaudeDraft)
 	}
 	waitForInput(t, inputLog, "\x15\x15")
+}
+
+func inputBoxShownUntilPickerTakesItsPlace(t *testing.T) {
+	agent, _, _ := startFakeClaude(t)
+	if shown, err := agent.InputBoxShown(); err != nil || !shown {
+		t.Fatalf("InputBoxShown with the input box drawn = %t, %v, want true", shown, err)
+	}
+	if err := agent.SendKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the input box to give way to the picker", func() bool {
+		shown, err := agent.InputBoxShown()
+		return err == nil && !shown
+	})
 }
 
 func statusIsLastWholeHookStateAndUnknownBeforeFirstHook(t *testing.T) {

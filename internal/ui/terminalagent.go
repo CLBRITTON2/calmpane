@@ -5,20 +5,23 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
-	"github.com/CLBRITTON2/calmpane/claudecode"
+	"github.com/CLBRITTON2/calmpane/internal/config"
 )
 
 type agentScreenChangedMsg struct{}
 
 type agentExitedMsg struct{}
 
-// RunZenViewOverTerminalAgent shows the zen view of the agent, or its own screen while alt+x switches to it, until the
-// agent exits.
-func RunZenViewOverTerminalAgent(agent TerminalAgent) error {
-	model := zenModel{agent: agent, entries: []claudecode.DialogueEntry{}, entryRows: [][]string{},
-		input: NewPromptInput()}
-	program := tea.NewProgram(agentScreenSwitchingView{zen: model, agent: agent, showsAgentScreen: false})
-	go followAgentSession(agent, program.Send)
+// RunZenViewOverTerminalAgent shows the zen view of the agent, or its own screen while the Claude screen key switches
+// to it, until the agent exits.
+func RunZenViewOverTerminalAgent(agent TerminalAgent, settings config.Config, slashHistoryFile string) error {
+	appearance, err := newAppearance(settings)
+	if err != nil {
+		return err
+	}
+	program := tea.NewProgram(agentScreenSwitchingView{zen: newZenModel(agent, appearance, settings.Keys.ClaudeScreen, slashHistoryFile),
+		agent: agent, showsAgentScreen: false})
+	go followAgentSession(agent, settings.StatusLine.Dir, program.Send)
 	finalModel, runErr := program.Run()
 	if finalModel, isSwitchingView := finalModel.(agentScreenSwitchingView); isSwitchingView {
 		return errors.Join(finalModel.zen.fatal, runErr)
@@ -56,10 +59,10 @@ func (v agentScreenSwitchingView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return v, tea.Quit
 	case tea.WindowSizeMsg:
 		if err := v.agent.Resize(msg.Width, msg.Height); err != nil {
-			v.zen.status = errorStyle.Render(err.Error())
+			v.zen.status = v.zen.appearance.errorStyle.Render(err.Error())
 		}
 	case tea.KeyPressMsg:
-		if msg.String() == toggleKey {
+		if msg.String() == v.zen.claudeScreenKey {
 			v.showsAgentScreen = !v.showsAgentScreen
 			return v, nil
 		}
@@ -79,7 +82,7 @@ func (v agentScreenSwitchingView) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // withAgentInputFailure shows a failed key or paste on the zen view's status line, seen once alt+x switches back.
 func (v agentScreenSwitchingView) withAgentInputFailure(err error) agentScreenSwitchingView {
 	if err != nil {
-		v.zen.status = errorStyle.Render(err.Error())
+		v.zen.status = v.zen.appearance.errorStyle.Render(err.Error())
 	}
 	return v
 }

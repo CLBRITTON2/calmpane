@@ -8,10 +8,11 @@ import (
 
 	"github.com/charmbracelet/x/term"
 
+	"github.com/CLBRITTON2/calmpane/internal/config"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
-func RunClaudeUnderZenView(claudeArguments []string) (int, error) {
+func RunClaudeUnderZenView(settings config.Config, slashHistoryFile string, claudeArguments []string) (int, error) {
 	zenExecutable, err := os.Executable()
 	if err != nil {
 		return 0, fmt.Errorf("find zen's executable for Claude's hooks: %w", err)
@@ -50,7 +51,7 @@ func RunClaudeUnderZenView(claudeArguments []string) (int, error) {
 			endedOnParentExit <- errors.Join(waitErr, agent.End())
 		}
 	}()
-	viewErr := ui.RunZenViewOverTerminalAgent(agent)
+	viewErr := ui.RunZenViewOverTerminalAgent(agent, settings, slashHistoryFile)
 	exitCode, closeErr := agent.Close()
 	return exitCode, errors.Join(viewErr, closeErr, <-endedOnParentExit, os.RemoveAll(hookDir))
 }

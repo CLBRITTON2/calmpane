@@ -51,8 +51,17 @@ func (m Mode) IsOn() (bool, error) {
 	return false, fmt.Errorf("read zen mode file %s: %w", m.ModeFile(), err)
 }
 
-// Toggle is the alt+x action.
-func Toggle(cli herdr.CLI, mode Mode) error {
+// ToggleAndNotifyFailure is the alt+x action. herdr 0.9.5 draws nothing of a failed plugin action's stderr, so a
+// failed toggle also shows its error as a herdr notification.
+func ToggleAndNotifyFailure(cli herdr.CLI, api herdr.API, mode Mode) error {
+	err := Toggle(cli, api, mode)
+	if err == nil {
+		return nil
+	}
+	return errors.Join(err, cli.ShowSilentNotification("Zen mode", err.Error()))
+}
+
+func Toggle(cli herdr.CLI, api herdr.API, mode Mode) error {
 	return mode.WhileLocked(func() error {
 		isOn, err := mode.IsOn()
 		if err != nil {
@@ -66,7 +75,7 @@ func Toggle(cli herdr.CLI, mode Mode) error {
 			if err := os.Remove(mode.ModeFile()); err != nil {
 				return fmt.Errorf("turn zen mode off: %w", err)
 			}
-			return CloseZenPanesMoveDraftsAndFocusAgent(cli, mode, panes)
+			return CloseZenPanesMoveDraftsAndFocusAgent(cli, api, mode, panes)
 		}
 		return TurnOnAndOpenOrShowZenPaneOfFocusedPane(cli, mode, panes)
 	})
@@ -193,7 +202,7 @@ func ZenPaneActionForFocusedPane(panes []herdr.Pane) (zenPaneAction, error) {
 
 // CloseZenPanesMoveDraftsAndFocusAgent also closes the zen panes a herdr server restart brought back as plain shells,
 // which keep the zen pane's title but lost calmpane.exe and the claude_pane token.
-func CloseZenPanesMoveDraftsAndFocusAgent(cli herdr.CLI, mode Mode, panes []herdr.Pane) error {
+func CloseZenPanesMoveDraftsAndFocusAgent(cli herdr.CLI, api herdr.API, mode Mode, panes []herdr.Pane) error {
 	focusedPane, err := FocusedPane(panes)
 	if err != nil {
 		return err
@@ -207,7 +216,7 @@ func CloseZenPanesMoveDraftsAndFocusAgent(cli herdr.CLI, mode Mode, panes []herd
 			return err
 		}
 		if isZenPane {
-			if err := MoveDraftIntoAgent(cli, mode.DraftFile(claudePaneID), claudePaneID); err != nil {
+			if err := MoveDraftIntoAgent(api, mode.DraftFile(claudePaneID), claudePaneID); err != nil {
 				return err
 			}
 		}

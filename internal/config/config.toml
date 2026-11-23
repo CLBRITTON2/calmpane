@@ -1,0 +1,62 @@
+# calmpane's config, read when the zen view or `calmpane claude` starts. Every field is required.
+# The colors are Rosé Pine main, https://rosepinetheme.com/palette.
+
+[colors]
+# The background of a prompt's band.
+prompt_band = "#26233a"
+# The > on a prompt's first row.
+prompt_marker = "#c4a7e7"
+# A prompt's text.
+prompt_text = "#e0def4"
+# The note under a queued prompt.
+prompt_note = "#6e6a86"
+# Claude's reply text.
+reply_text = "#e0def4"
+# A reply's headings.
+heading = "#c4a7e7"
+# Text in backticks in a reply.
+inline_code = "#f6c177"
+# A reply's links.
+link = "#9ccfd8"
+# A question Claude asks.
+question = "#f6c177"
+# The options under a question.
+option = "#908caa"
+# The status row while Claude works.
+working = "#6e6a86"
+# The status row while Claude waits for you.
+waiting = "#f6c177"
+# The status row once Claude's turn is done.
+done = "#9ccfd8"
+# A failure on the status row.
+error = "#eb6f92"
+# The rule between the entries and the input, and above Claude's status line.
+separator = "#403d52"
+# The top and bottom rules of a code block's frame.
+code_rule = "#403d52"
+# The language and the copy hint on a code block's top rule.
+code_label = "#6e6a86"
+
+[lines]
+# The character repeated for the rule between the entries and the input, one column wide.
+separator = "─"
+# The character repeated for the top and bottom rules of a code block's frame, one column wide.
+code_rule = "─"
+
+[code]
+# The chroma style highlighting code blocks, by the name of its file in
+# https://github.com/alecthomas/chroma/tree/master/styles without .xml.
+theme = "rose-pine"
+# A chroma style entry for comments in code blocks, such as "bold #c4a7e7". Empty keeps the theme's own. Bold iris
+# sets the "# 1. ..." step lines of a command block apart from the commands under them.
+comment = "bold #c4a7e7"
+
+[status_line]
+# The folder where Claude's status line command writes its line and a line break to a file named for the session id,
+# a leading ~ standing for your profile folder. Empty shows no status line row.
+dir = '~\AppData\Local\windows-dev\statusline'
+
+[keys]
+# The key that shows Claude's own screen in `calmpane claude`, and that the waiting row names. In herdr it must be
+# the key herdr's config binds to the zen toggle action, which calmpane cannot read.
+claude_screen = "alt+x"

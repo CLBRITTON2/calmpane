@@ -20,8 +20,13 @@ type Agent interface {
 	// TakeInput empties the agent's own input box and returns the text it held.
 	TakeInput() (string, error)
 	Status() (AgentStatus, error)
-	// WaitForSessionID waits until the agent reports the session whose transcript holds its dialogue.
+	// WaitForSessionID waits until the agent reports the session whose transcript holds its dialogue, the session a
+	// /clear or /resume switched to included.
 	WaitForSessionID() (string, error)
+	// InputBoxShown is false while a picker or dialog takes the place of the agent's input box.
+	InputBoxShown() (bool, error)
+	// WorkingDirectory is the folder the agent works in, whose .claude folder holds the project's commands.
+	WorkingDirectory() (string, error)
 }
 
 type AgentStatus int
@@ -35,6 +40,8 @@ const (
 )
 
 var ErrAgentBlocked = errors.New("the agent waits for an answer and takes no prompt")
+
+var ErrClaudeInputHoldsPaste = errors.New("Claude's input holds pasted text. Send or clear it in Claude first.")
 
 // TerminalAgent is an Agent running in a terminal zen owns, so zen can show the agent's own screen in place of the
 // zen view and type into it.
@@ -62,6 +69,10 @@ func TakeClaudeInput(inputName string, styledScreen func() (string, error), send
 	box := claudecode.InputBoxOnScreen(screen)
 	if box.Draft == "" {
 		return "", nil
+	}
+	// The screen shows only the paste's label, so emptying the box would lose the paste
+	if claudecode.HoldsPasteLabel(box.Draft) {
+		return "", ErrClaudeInputHoldsPaste
 	}
 	// Claude Code 2.1.329: ctrl+u deletes back to the start of the cursor's row or the line break before it, so twice
 	// the rows empties the box. ctrl+c would interrupt a working turn, and ctrl+l only redraws.

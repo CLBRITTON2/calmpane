@@ -10,13 +10,13 @@ import (
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
 
-	"github.com/CLBRITTON2/calmpane/claudecode"
+	"github.com/CLBRITTON2/calmpane/internal/config"
 )
 
 const roseLocation = "\x1b[38;2;235;188;186mherdr-zen/zen-status-line\x1b[0m"
 
 func modelWithClaudeStatusLine(line string) zenModel {
-	model := zenModel{entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput()}
+	model := newZenModel(nil, testAppearance, "alt+x", "")
 	model = model.withSize(40, 12).withEntries(numberedPrompts(1, 20), nil)
 	updated, _ := model.Update(claudeStatusLineMsg{line: line})
 	return updated.(zenModel)
@@ -27,6 +27,17 @@ func TestRowsAroundInput(t *testing.T) {
 	t.Run("blankRowSeparatesNewestEntryFromWorkingRow", blankRowSeparatesNewestEntryFromWorkingRow)
 	t.Run("newestEntrySitsRightAboveEmptyStatusRowWithNoStatus", newestEntrySitsRightAboveEmptyStatusRowWithNoStatus)
 	t.Run("inputIsLastRowWithNoClaudeStatusLine", inputIsLastRowWithNoClaudeStatusLine)
+	t.Run("separatorRepeatsConfiguredSeparatorLineAcrossWidth", separatorRepeatsConfiguredSeparatorLineAcrossWidth)
+}
+
+func separatorRepeatsConfiguredSeparatorLineAcrossWidth(t *testing.T) {
+	settings := exampleSettings(t)
+	settings.Lines = config.Lines{Separator: "━", CodeRule: "═"}
+	model := newZenModel(nil, appearanceFrom(t, settings), "alt+x", "").withSize(40, 12)
+	screen := ansi.Strip(model.screen())
+	if !strings.Contains(screen, strings.Repeat("━", 40)) || strings.Contains(screen, "═") || strings.Contains(screen, "─") {
+		t.Errorf("screen = %q, want a separator of 40 ━ and no other line", screen)
+	}
 }
 
 func claudeStatusLineDrawnUnderSeparatorWithItsColorsAndCutAtWidth(t *testing.T) {

@@ -1,7 +1,9 @@
 package zenmode
 
 import (
+	"errors"
 	"os"
+	"path/filepath"
 	"reflect"
 	"slices"
 	"strings"
@@ -10,6 +12,7 @@ import (
 
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
+	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
 func TestMain(m *testing.M) {
@@ -193,25 +196,72 @@ func focusHooksRunTogetherOpenOneZenPaneForClaudePane(t *testing.T) {
 }
 
 func TestToggle(t *testing.T) {
-	t.Run("altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView",
-		altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView)
+	t.Run("altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView",
+		altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView)
 	t.Run("altXMovesWrappedDraftOutOfClaudesInputAsOneLine", altXMovesWrappedDraftOutOfClaudesInputAsOneLine)
 	t.Run("altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude", altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude)
 	t.Run("altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys",
 		altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys)
+	t.Run("altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel", altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel)
+	t.Run("altXMovesTypedPastedTextWithoutLabelNumber", altXMovesTypedPastedTextWithoutLabelNumber)
 	t.Run("altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane",
 		altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane)
 	t.Run("altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane", altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane)
+	t.Run("altXRefusedShowsErrorInSilentNotificationTitledZenMode", altXRefusedShowsErrorInSilentNotificationTitledZenMode)
+	t.Run("altXSucceedingShowsNoNotification", altXSucceedingShowsNoNotification)
+	t.Run("altXFailingNotificationKeepsToggleErrorAndAddsItsOwn", altXFailingNotificationKeepsToggleErrorAndAddsItsOwn)
 }
 
-func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView(t *testing.T) {
+func altXRefusedShowsErrorInSilentNotificationTitledZenMode(t *testing.T) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-pasted-label.ansi", "")
+	if err := ToggleAndNotifyFailure(cli, herdr.API{}, mode); !errors.Is(err, ui.ErrClaudeInputHoldsPaste) {
+		t.Errorf("ToggleAndNotifyFailure = %v, want %v", err, ui.ErrClaudeInputHoldsPaste)
+	}
+	want := []string{
+		"pane list",
+		"pane read w1:p1 --source visible --format ansi",
+		"notification show Zen mode --body " + ui.ErrClaudeInputHoldsPaste.Error() + " --sound none",
+	}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func altXSucceedingShowsNoNotification(t *testing.T) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-empty.ansi", "")
+	if err := ToggleAndNotifyFailure(cli, herdr.API{}, mode); err != nil {
+		t.Fatal(err)
+	}
+	for _, call := range calls() {
+		if strings.HasPrefix(call, "notification") {
+			t.Errorf("herdr calls = %q, want no notification", calls())
+		}
+	}
+}
+
+func altXFailingNotificationKeepsToggleErrorAndAddsItsOwn(t *testing.T) {
+	cli := herdr.CLI{Binary: filepath.Join(t.TempDir(), "missing-herdr.exe"), PluginID: "zen-test"}
+	err := ToggleAndNotifyFailure(cli, herdr.API{}, testMode(t))
+	for _, wantText := range []string{"herdr pane list failed", "herdr notification show failed"} {
+		if err == nil || !strings.Contains(err.Error(), wantText) {
+			t.Errorf("ToggleAndNotifyFailure = %v, want an error holding %q", err, wantText)
+		}
+	}
+}
+
+func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "claude-input-empty.ansi")
-	if err := os.WriteFile(mode.DraftFile("w1:p1"), []byte("left by a closed zen pane"), 0o644); err != nil {
+	pastes := []string{"a\nb\nc\nd"}
+	if err := WriteDraft(mode.DraftFile("w1:p1"), ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]", Pastes: pastes}); err != nil {
 		t.Fatal(err)
 	}
-	if err := Toggle(cli, mode); err != nil {
+	if err := Toggle(cli, herdr.API{}, mode); err != nil {
 		t.Fatal(err)
 	}
 	if isOn, err := mode.IsOn(); err != nil || !isOn {
@@ -229,16 +279,16 @@ func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftAndOpensAndMarksZenView(t *
 	if got := calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
 	}
-	assertDraft(t, mode.DraftFile("w1:p1"), "left by a closed zen pane\nmove this draft")
+	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]\nmove this draft", Pastes: pastes})
 }
 
-func assertDraft(t *testing.T, draftFile string, want string) {
-	draft, err := os.ReadFile(draftFile)
+func assertDraft(t *testing.T, draftFile string, want ui.Draft) {
+	draft, err := SavedDraft(draftFile)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if string(draft) != want {
-		t.Errorf("draft = %q, want %q", draft, want)
+	if draft.Text != want.Text || !slices.Equal(draft.Pastes, want.Pastes) {
+		t.Errorf("draft = %+q, want %+q", draft, want)
 	}
 }
 
@@ -246,14 +296,14 @@ func altXMovesWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-wrapped.ansi", "claude-input-empty.ansi")
-	if err := Toggle(cli, mode); err != nil {
+	if err := Toggle(cli, herdr.API{}, mode); err != nil {
 		t.Fatal(err)
 	}
 	if got := calls(); !slices.Contains(got, "pane send-keys w1:p1 ctrl+u ctrl+u ctrl+u ctrl+u") {
 		t.Errorf("herdr calls = %q, want ctrl+u twice per row of the box", got)
 	}
-	assertDraft(t, mode.DraftFile("w1:p1"), "this unsent draft is long enough to wrap across two rows of the Claude "+
-		"input box, so pane read drops the space at the wrap")
+	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "this unsent draft is long enough to wrap across two rows of " +
+		"the Claude input box, so pane read drops the space at the wrap"})
 }
 
 func altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude(t *testing.T) {
@@ -273,7 +323,7 @@ func altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude(t *test
 			cli, calls := herdrtest.Fake(t, []herdr.Pane{testCase.pane})
 			mode := testMode(t)
 			herdrtest.ShowOnScreen(t, "w1:p1", testCase.capture, "")
-			if err := Toggle(cli, mode); err != nil {
+			if err := Toggle(cli, herdr.API{}, mode); err != nil {
 				t.Fatal(err)
 			}
 			for _, call := range calls() {
@@ -292,7 +342,7 @@ func altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearK
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
-	err := Toggle(cli, mode)
+	err := Toggle(cli, herdr.API{}, mode)
 	if err == nil || !strings.Contains(err.Error(), "pane w1:p1 still holds text") {
 		t.Errorf("Toggle = %v, want an error naming pane w1:p1", err)
 	}
@@ -309,26 +359,56 @@ func altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearK
 	}
 }
 
+func altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel(t *testing.T) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-pasted-label.ansi", "claude-input-empty.ansi")
+	if err := Toggle(cli, herdr.API{}, mode); !errors.Is(err, ui.ErrClaudeInputHoldsPaste) {
+		t.Errorf("Toggle = %v, want %v", err, ui.ErrClaudeInputHoldsPaste)
+	}
+	if isOn, err := mode.IsOn(); err != nil || isOn {
+		t.Errorf("IsOn = %v, %v, want false", isOn, err)
+	}
+	if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
+		t.Errorf("draft file: %v, want none", err)
+	}
+	want := []string{"pane list", "pane read w1:p1 --source visible --format ansi"}
+	if got := calls(); !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func altXMovesTypedPastedTextWithoutLabelNumber(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-typed-label-start.ansi", "claude-input-empty.ansi")
+	if err := Toggle(cli, herdr.API{}, mode); err != nil {
+		t.Fatal(err)
+	}
+	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "[Pasted text"})
+}
+
 func altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane(t *testing.T) {
-	cli, calls := herdrtest.Fake(t, []herdr.Pane{
+	panes := []herdr.Pane{
 		herdrtest.ClaudePane("w1:p1", false),
 		herdrtest.ZenPane("w1:p2", "w1:p1", true),
 		herdrtest.ClaudePane("w1:p3", false),
 		herdrtest.ZenPane("w1:p4", "w1:p3", false),
 		{PaneID: "w1:p5", Label: herdr.ZenPaneTitle},
-	})
+	}
+	cli, calls := herdrtest.Fake(t, panes)
+	api, requests := herdrtest.FakeAPI(t, panes)
 	mode := testMode(t)
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	draft := "first line\nsecond line"
-	if err := os.WriteFile(mode.DraftFile("w1:p1"), []byte(draft), 0o644); err != nil {
+	if err := WriteDraft(mode.DraftFile("w1:p1"), ui.Draft{Text: "first line\nsecond line"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(mode.DraftFile("w1:p3"), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Toggle(cli, mode); err != nil {
+	if err := Toggle(cli, api, mode); err != nil {
 		t.Fatal(err)
 	}
 	if isOn, err := mode.IsOn(); err != nil || isOn {
@@ -337,14 +417,16 @@ func altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane(t *t
 	want := []string{
 		"pane list",
 		"pane close w1:p2",
-		"pane send-text w1:p1 first line",
-		"second line",
 		"pane close w1:p4",
 		"pane close w1:p5",
 		"agent focus w1:p1",
 	}
 	if got := calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+	wantRequests := []string{"pane.send_text w1:p1 first line\nsecond line"}
+	if got := requests(); !reflect.DeepEqual(got, wantRequests) {
+		t.Errorf("herdr API requests = %q, want %q", got, wantRequests)
 	}
 	for _, claudePaneID := range []string{"w1:p1", "w1:p3"} {
 		if _, err := os.Stat(mode.DraftFile(claudePaneID)); !os.IsNotExist(err) {
@@ -360,7 +442,7 @@ func altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane(t *testing.T) {
 	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if err := Toggle(cli, mode); err != nil {
+	if err := Toggle(cli, herdr.API{}, mode); err != nil {
 		t.Fatal(err)
 	}
 	want := []string{"pane list", "pane close w1:p2"}

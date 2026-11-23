@@ -6,8 +6,10 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path/filepath"
 	"strconv"
 
+	"github.com/CLBRITTON2/calmpane/internal/config"
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/ptyagent"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
@@ -17,7 +19,17 @@ import (
 func main() {
 	switch {
 	case len(os.Args) >= 2 && os.Args[1] == "claude":
-		exitCode, err := ptyagent.RunClaudeUnderZenView(os.Args[2:])
+		settings, err := loadConfig()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		historyFile, err := slashHistoryFile()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		exitCode, err := ptyagent.RunClaudeUnderZenView(settings, historyFile, os.Args[2:])
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 		}
@@ -37,18 +49,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, "HERDR_BIN_PATH or HERDR_PLUGIN_ID is not set: calmpane runs from a herdr plugin")
 		os.Exit(2)
 	}
+	api := herdr.API{SocketPath: os.Getenv("HERDR_SOCKET_PATH")}
 	var err error
 	switch {
 	case len(os.Args) == 1:
+		settings, configErr := loadConfig()
 		claudePaneID := os.Getenv(herdr.ClaudePaneEnv)
 		mode, modeErr := zenmode.ModeOfPlugin(cli.PluginID)
 		draftFile := mode.DraftFile(claudePaneID)
 		draft, draftErr := zenmode.SavedDraft(draftFile)
-		saveDraft := func(draft string) error { return zenmode.WriteWhole(draftFile, draft) }
-		err = ui.RunZenView(zenmode.HerdrAgent{CLI: cli, ClaudePaneID: claudePaneID}, draft, saveDraft,
-			errors.Join(modeErr, draftErr))
+		saveDraft := func(draft ui.Draft) error { return zenmode.WriteDraft(draftFile, draft) }
+		historyFile, historyErr := slashHistoryFile()
+		err = ui.RunZenView(zenmode.HerdrAgent{CLI: cli, API: api, ClaudePaneID: claudePaneID}, settings, draft, draftErr,
+			saveDraft, historyFile, errors.Join(configErr, modeErr, historyErr))
 	case len(os.Args) == 2 && os.Args[1] == "toggle":
-		err = withZenMode(cli, zenmode.Toggle)
+		err = withZenMode(cli, func(cli herdr.CLI, mode zenmode.Mode) error {
+			return zenmode.ToggleAndNotifyFailure(cli, api, mode)
+		})
 	case len(os.Args) == 2 && os.Args[1] == "on":
 		err = withZenMode(cli, zenmode.TurnOnAndShowFocusedZenView)
 	case len(os.Args) == 2 && os.Args[1] == "focus":
@@ -69,6 +86,23 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+}
+
+func loadConfig() (config.Config, error) {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return config.Config{}, fmt.Errorf("find the folder of calmpane's config: %w", err)
+	}
+	return config.Load(filepath.Join(configDir, "calmpane", "config.toml"))
+}
+
+// slashHistoryFile keeps how often and how lately zen sent each slash command, in %LOCALAPPDATA%\calmpane.
+func slashHistoryFile() (string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", fmt.Errorf("find the folder of calmpane's slash command history: %w", err)
+	}
+	return filepath.Join(cacheDir, "calmpane", "slash-history.json"), nil
 }
 
 func withZenMode(cli herdr.CLI, command func(herdr.CLI, zenmode.Mode) error) error {

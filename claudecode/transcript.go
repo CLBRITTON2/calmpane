@@ -10,6 +10,8 @@ import (
 	"slices"
 	"strings"
 	"time"
+
+	"github.com/charmbracelet/x/ansi"
 )
 
 type EntryKind int
@@ -20,6 +22,10 @@ const (
 	QuestionEntry
 	// CompactSummaryEntry stands for the summary Claude Code writes as a user record when it compacts the session.
 	CompactSummaryEntry
+	// CommandEntry holds a slash command the user ran as its name and arguments, "/effort high".
+	CommandEntry
+	// CommandOutputEntry holds the text a slash command wrote, without its terminal color codes.
+	CommandOutputEntry
 )
 
 // A QuestionEntry holds the question in Text and its option labels in Options. A PromptEntry holds in Pastes each
@@ -33,9 +39,20 @@ type DialogueEntry struct {
 
 // Claude Code writes these as user records with string content, though the user did not type them.
 var notPromptPrefixes = []string{
-	"<system-reminder", "<task-notification", "<agent-message", "<local-command-stdout", "<local-command-caveat",
-	"<command-name", "<command-message", "<bash-input", "<bash-stdout", "<bash-stderr",
+	"<system-reminder", "<task-notification", "<agent-message", "<local-command-caveat", "<bash-input", "<bash-stdout",
+	"<bash-stderr",
 }
+
+// Claude Code writes a slash command the user ran as these tags, in a user record or a local_command system record:
+// <command-name>, <command-message> and <command-args> for the command, <local-command-stdout> for its output.
+var (
+	commandName   = regexp.MustCompile(`(?s)<command-name>(.*?)</command-name>`)
+	commandArgs   = regexp.MustCompile(`(?s)<command-args>(.*?)</command-args>`)
+	commandOutput = regexp.MustCompile(`(?s)^<local-command-stdout>(.*)</local-command-stdout>`)
+)
+
+// clearCommand opens the transcript of the session it starts, which Claude's own view shows empty.
+const clearCommand = "/clear"
 
 // A tag's own line break goes with it, so the pasted text keeps only the blank lines it held.
 var pastedContentTag = regexp.MustCompile(`</?pasted_content[^>]*>\n?`)
@@ -44,12 +61,15 @@ var pastedContent = regexp.MustCompile(`(?s)<pasted_content[^>]*>(.*?)</pasted_c
 
 type transcriptRecord struct {
 	Type             string    `json:"type"`
+	Subtype          string    `json:"subtype"`
 	IsMeta           bool      `json:"isMeta"`
 	IsCompactSummary bool      `json:"isCompactSummary"`
 	Timestamp        time.Time `json:"timestamp"`
 	Message          struct {
 		Content json.RawMessage `json:"content"`
 	} `json:"message"`
+	// Content is a system record's text.
+	Content json.RawMessage `json:"content"`
 	// Claude Code writes a prompt sent while it works as an attachment of type queued_command.
 	Attachment struct {
 		Type        string          `json:"type"`
@@ -108,6 +128,9 @@ func mayHoldDialogue(line []byte) bool {
 	if bytes.Contains(line, []byte(`"type":"queued_command"`)) && bytes.Contains(line, []byte(`"commandMode":"prompt"`)) {
 		return true
 	}
+	if bytes.Contains(line, []byte(`"type":"system"`)) && bytes.Contains(line, []byte(`"subtype":"local_command"`)) {
+		return true
+	}
 	return bytes.Contains(line, []byte(`"type":"assistant"`)) &&
 		(bytes.Contains(line, []byte(`"type":"text"`)) || bytes.Contains(line, []byte(`"name":"AskUserQuestion"`)))
 }
@@ -136,6 +159,15 @@ func DialogueEntries(line []byte) ([]DialogueEntry, error) {
 		return promptEntries(record.Attachment.Prompt)
 	case "assistant":
 		return assistantEntries(record.Message.Content)
+	case "system":
+		if record.Subtype != "local_command" {
+			return nil, nil
+		}
+		var content string
+		if err := json.Unmarshal(record.Content, &content); err != nil {
+			return nil, fmt.Errorf("decode local command content %.80q: %w", record.Content, err)
+		}
+		return commandEntries(content), nil
 	default:
 		return nil, nil
 	}
@@ -150,6 +182,9 @@ func promptEntries(content json.RawMessage) ([]DialogueEntry, error) {
 	if err := json.Unmarshal(content, &prompt); err != nil {
 		return nil, fmt.Errorf("decode user prompt %.80q: %w", content, err)
 	}
+	if strings.HasPrefix(prompt, "<command-") || strings.HasPrefix(prompt, "<local-command-stdout") {
+		return commandEntries(prompt), nil
+	}
 	for _, prefix := range notPromptPrefixes {
 		if strings.HasPrefix(prompt, prefix) {
 			return nil, nil
@@ -162,6 +197,27 @@ func promptEntries(content json.RawMessage) ([]DialogueEntry, error) {
 		}
 	}
 	return []DialogueEntry{{Kind: PromptEntry, Text: typedText(prompt), Pastes: pastes}}, nil
+}
+
+// commandEntries holds the command or the output in a record's text, none for an empty output or the /clear that
+// opens a session.
+func commandEntries(text string) []DialogueEntry {
+	if output := commandOutput.FindStringSubmatch(text); output != nil {
+		plainOutput := strings.TrimSpace(ansi.Strip(output[1]))
+		if plainOutput == "" {
+			return nil
+		}
+		return []DialogueEntry{{Kind: CommandOutputEntry, Text: plainOutput}}
+	}
+	name := commandName.FindStringSubmatch(text)
+	if name == nil || name[1] == clearCommand {
+		return nil
+	}
+	command := name[1]
+	if args := commandArgs.FindStringSubmatch(text); args != nil && strings.TrimSpace(args[1]) != "" {
+		command += " " + strings.TrimSpace(args[1])
+	}
+	return []DialogueEntry{{Kind: CommandEntry, Text: command}}
 }
 
 func typedText(prompt string) string {
@@ -210,7 +266,9 @@ func assistantEntries(content json.RawMessage) ([]DialogueEntry, error) {
 }
 
 func TurnAfterLine(turn CurrentTurn, line []byte, lineEntries []DialogueEntry) (CurrentTurn, error) {
-	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry DialogueEntry) bool { return entry.Kind == PromptEntry })
+	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry DialogueEntry) bool {
+		return entry.Kind == PromptEntry || entry.Kind == CommandEntry
+	})
 	if !holdsPrompt && !bytes.Contains(line, []byte(`"type":"tool_use"`)) {
 		return turn, nil
 	}

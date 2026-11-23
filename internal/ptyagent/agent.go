@@ -20,6 +20,7 @@ import (
 	"github.com/charmbracelet/x/vt"
 	"golang.org/x/sys/windows"
 
+	"github.com/CLBRITTON2/calmpane/claudecode"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
 
@@ -172,25 +173,36 @@ func (a *Agent) Interrupt() error {
 }
 
 func (a *Agent) TakeInput() (string, error) {
-	// The screen keeps only its dim attribute, the one claudecode.InputBoxOnScreen reads.
-	styledScreen := func() (string, error) {
-		rows := make([]string, a.emulator.Height())
-		for rowIndex := range rows {
-			row := make(uv.Line, a.emulator.Width())
-			for column := range row {
-				cell := a.emulator.CellAt(column, rowIndex)
-				if cell == nil {
-					continue
-				}
-				row[column] = *cell
-				row[column].Style = uv.Style{Attrs: cell.Style.Attrs & uv.AttrFaint}
-			}
-			rows[rowIndex] = row.Render()
-		}
-		return strings.Join(rows, "\n"), nil
-	}
+	styledScreen := func() (string, error) { return a.screenWithDimOnly(), nil }
 	sendCtrlU := func(count int) error { return a.write(strings.Repeat("\x15", count)) }
 	return ui.TakeClaudeInput("Claude's input", styledScreen, sendCtrlU)
+}
+
+// screenWithDimOnly keeps dim because it is the one attribute claudecode.InputBoxOnScreen reads.
+func (a *Agent) screenWithDimOnly() string {
+	rows := make([]string, a.emulator.Height())
+	for rowIndex := range rows {
+		row := make(uv.Line, a.emulator.Width())
+		for column := range row {
+			cell := a.emulator.CellAt(column, rowIndex)
+			if cell == nil {
+				continue
+			}
+			row[column] = *cell
+			row[column].Style = uv.Style{Attrs: cell.Style.Attrs & uv.AttrFaint}
+		}
+		rows[rowIndex] = row.Render()
+	}
+	return strings.Join(rows, "\n")
+}
+
+func (a *Agent) InputBoxShown() (bool, error) {
+	return claudecode.InputBoxShown(a.screenWithDimOnly()), nil
+}
+
+// WorkingDirectory is zen's own, which Claude starts in.
+func (a *Agent) WorkingDirectory() (string, error) {
+	return os.Getwd()
 }
 
 // Status is AgentUnknown before Claude's first hook and once it has exited.

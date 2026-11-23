@@ -19,9 +19,51 @@ func TestHerdrAgent(t *testing.T) {
 	t.Run("statusMapsHerdrAgentStatusAndUnknownForAnyOther", statusMapsHerdrAgentStatusAndUnknownForAnyOther)
 	t.Run("sendPromptToBlockedClaudeReturnsAgentBlocked", sendPromptToBlockedClaudeReturnsAgentBlocked)
 	t.Run("sendPromptSendNowAndInterruptReachClaudePane", sendPromptSendNowAndInterruptReachClaudePane)
+	t.Run("sendPromptSendsPromptLongerThanWindowsCommandLineWhole", sendPromptSendsPromptLongerThanWindowsCommandLineWhole)
+	t.Run("sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt", sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt)
+	t.Run("sendPromptWithoutSocketPathFailsNamingHerdrSocketPath", sendPromptWithoutSocketPathFailsNamingHerdrSocketPath)
 	t.Run("waitForSessionIDWaitsUntilHerdrReportsClaudeSession", waitForSessionIDWaitsUntilHerdrReportsClaudeSession)
 	t.Run("waitForSessionIDFailsForPaneWithoutClaudeSession", waitForSessionIDFailsForPaneWithoutClaudeSession)
 	t.Run("waitForSessionIDFailsWithoutClaudePaneID", waitForSessionIDFailsWithoutClaudePaneID)
+	t.Run("inputBoxShownOnlyWhileClaudePaneShowsInputBox", inputBoxShownOnlyWhileClaudePaneShowsInputBox)
+	t.Run("workingDirectoryIsClaudePaneCwd", workingDirectoryIsClaudePaneCwd)
+	t.Run("workingDirectoryFailsForPaneWithoutCwd", workingDirectoryFailsForPaneWithoutCwd)
+}
+
+func inputBoxShownOnlyWhileClaudePaneShowsInputBox(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	for capture, want := range map[string]bool{"claude-input-empty.ansi": true, "claude-input-scrolled.ansi": false} {
+		herdrtest.ShowOnScreen(t, "w1:p1", capture, "")
+		got, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.InputBoxShown()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got != want {
+			t.Errorf("InputBoxShown with %s on screen = %t, want %t", capture, got, want)
+		}
+	}
+}
+
+func workingDirectoryIsClaudePaneCwd(t *testing.T) {
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	claudePane.Cwd = `C:\work\project\`
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
+	got, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WorkingDirectory()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != claudePane.Cwd {
+		t.Errorf("WorkingDirectory = %q, want %q", got, claudePane.Cwd)
+	}
+}
+
+func workingDirectoryFailsForPaneWithoutCwd(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WorkingDirectory()
+	want := "herdr reports no working directory for pane w1:p1"
+	if err == nil || err.Error() != want {
+		t.Errorf("WorkingDirectory error = %v, want %q", err, want)
+	}
 }
 
 func statusMapsHerdrAgentStatusAndUnknownForAnyOther(t *testing.T) {
@@ -47,15 +89,17 @@ func statusMapsHerdrAgentStatusAndUnknownForAnyOther(t *testing.T) {
 func sendPromptToBlockedClaudeReturnsAgentBlocked(t *testing.T) {
 	claudePane := herdrtest.ClaudePane("w1:p1", true)
 	claudePane.AgentStatus = "blocked"
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
-	if err := (HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}).SendPrompt("go"); !errors.Is(err, ui.ErrAgentBlocked) {
+	api, _ := herdrtest.FakeAPI(t, []herdr.Pane{claudePane})
+	if err := (HerdrAgent{API: api, ClaudePaneID: "w1:p1"}).SendPrompt("go"); !errors.Is(err, ui.ErrAgentBlocked) {
 		t.Errorf("SendPrompt error = %v, want ui.ErrAgentBlocked", err)
 	}
 }
 
 func sendPromptSendNowAndInterruptReachClaudePane(t *testing.T) {
-	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
-	agent := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}
+	panes := []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)}
+	cli, calls := herdrtest.Fake(t, panes)
+	api, requests := herdrtest.FakeAPI(t, panes)
+	agent := HerdrAgent{CLI: cli, API: api, ClaudePaneID: "w1:p1"}
 	if err := agent.SendPrompt("ship it"); err != nil {
 		t.Fatal(err)
 	}
@@ -65,9 +109,40 @@ func sendPromptSendNowAndInterruptReachClaudePane(t *testing.T) {
 	if err := agent.Interrupt(); err != nil {
 		t.Fatal(err)
 	}
-	want := []string{"agent prompt w1:p1 ship it", "pane send-keys w1:p1 ctrl+x ctrl+s", "pane send-keys w1:p1 esc"}
+	if got, want := requests(), []string{"agent.prompt w1:p1 ship it"}; !reflect.DeepEqual(got, want) {
+		t.Errorf("herdr API requests = %q, want %q", got, want)
+	}
+	want := []string{"pane send-keys w1:p1 ctrl+x ctrl+s", "pane send-keys w1:p1 esc"}
 	if got := calls(); !reflect.DeepEqual(got, want) {
 		t.Errorf("herdr calls = %q, want %q", got, want)
+	}
+}
+
+func sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt(t *testing.T) {
+	api, _ := herdrtest.FakeAPI(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	err := HerdrAgent{API: api, ClaudePaneID: "w1:p9"}.SendPrompt("secret prompt text")
+	want := "herdr agent.prompt failed: pane_not_found: pane w1:p9 not found"
+	if err == nil || err.Error() != want {
+		t.Errorf("SendPrompt error = %v, want %q", err, want)
+	}
+}
+
+func sendPromptWithoutSocketPathFailsNamingHerdrSocketPath(t *testing.T) {
+	err := HerdrAgent{API: herdr.API{}, ClaudePaneID: "w1:p1"}.SendPrompt("go")
+	want := "herdr agent.prompt failed: HERDR_SOCKET_PATH is not set"
+	if err == nil || err.Error() != want {
+		t.Errorf("SendPrompt error = %v, want %q", err, want)
+	}
+}
+
+func sendPromptSendsPromptLongerThanWindowsCommandLineWhole(t *testing.T) {
+	api, requests := herdrtest.FakeAPI(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	prompt := strings.Repeat("a line of the pasted log\n", 1600)
+	if err := (HerdrAgent{API: api, ClaudePaneID: "w1:p1"}).SendPrompt(prompt); err != nil {
+		t.Fatal(err)
+	}
+	if got := requests(); len(got) != 1 || got[0] != "agent.prompt w1:p1 "+prompt {
+		t.Errorf("herdr API requests = %.80q, want one agent.prompt of the %d character prompt", got, len(prompt))
 	}
 }
 

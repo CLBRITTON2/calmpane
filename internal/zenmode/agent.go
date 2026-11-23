@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"time"
 
+	"github.com/CLBRITTON2/calmpane/claudecode"
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
 )
@@ -12,12 +13,13 @@ import (
 // HerdrAgent is the Claude in herdr pane ClaudePaneID.
 type HerdrAgent struct {
 	CLI          herdr.CLI
+	API          herdr.API
 	ClaudePaneID string
 }
 
 // SendPrompt returns once herdr has written the prompt and its Enter, so keys sent after it reach Claude after them.
 func (a HerdrAgent) SendPrompt(prompt string) error {
-	err := a.CLI.PromptAgent(a.ClaudePaneID, prompt)
+	err := a.API.PromptAgent(a.ClaudePaneID, prompt)
 	if errors.Is(err, herdr.ErrAgentBlocked) {
 		return ui.ErrAgentBlocked
 	}
@@ -36,6 +38,26 @@ func (a HerdrAgent) Interrupt() error {
 
 func (a HerdrAgent) TakeInput() (string, error) {
 	return TakeAgentInput(a.CLI, a.ClaudePaneID)
+}
+
+func (a HerdrAgent) InputBoxShown() (bool, error) {
+	screen, err := a.CLI.StyledScreen(a.ClaudePaneID)
+	if err != nil {
+		return false, err
+	}
+	return claudecode.InputBoxShown(screen), nil
+}
+
+// WorkingDirectory is the Claude pane's, which herdr reads from the process running in it.
+func (a HerdrAgent) WorkingDirectory() (string, error) {
+	claudePane, err := a.CLI.Pane(a.ClaudePaneID)
+	if err != nil {
+		return "", err
+	}
+	if claudePane.Cwd == "" {
+		return "", fmt.Errorf("herdr reports no working directory for pane %s", a.ClaudePaneID)
+	}
+	return claudePane.Cwd, nil
 }
 
 func (a HerdrAgent) Status() (ui.AgentStatus, error) {
