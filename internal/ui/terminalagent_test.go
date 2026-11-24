@@ -51,11 +51,13 @@ func TestAgentScreenSwitchingView(t *testing.T) {
 	t.Run("windowSizeResizesAgent", windowSizeResizesAgent)
 	t.Run("agentInputFailureShowsOnZenStatusLine", agentInputFailureShowsOnZenStatusLine)
 	t.Run("agentScreenChangeWaitsForNextChange", agentScreenChangeWaitsForNextChange)
+	t.Run("trustDialogShowsAgentScreenUntilItClosesAndToggleKeyStillWorks",
+		trustDialogShowsAgentScreenUntilItClosesAndToggleKeyStillWorks)
 	t.Run("agentExitQuits", agentExitQuits)
 }
 
 func newAgentScreenSwitchingView(agent *terminalAgentRecorder) tea.Model {
-	return agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+x", ""), agent: agent, showsAgentScreen: false}
+	return agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+x", "ctrl+e", ""), agent: agent, showsAgentScreen: false}
 }
 
 func toggleKeyShowsAgentScreenWithItsCursorAndBack(t *testing.T) {
@@ -84,7 +86,7 @@ func toggleKeyShowsAgentScreenWithItsCursorAndBack(t *testing.T) {
 
 func configuredClaudeScreenKeyShowsAgentScreenAndAltXDoesNot(t *testing.T) {
 	agent := &terminalAgentRecorder{screen: "Claude's own screen"}
-	var view tea.Model = agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+z", ""), agent: agent,
+	var view tea.Model = agentScreenSwitchingView{zen: newZenModel(agent, testAppearance, "alt+z", "ctrl+e", ""), agent: agent,
 		showsAgentScreen: false}
 	view, _ = view.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt})
 	if view.(agentScreenSwitchingView).showsAgentScreen {
@@ -150,6 +152,26 @@ func agentScreenChangeWaitsForNextChange(t *testing.T) {
 	agent.screenChanged <- struct{}{}
 	if _, changed := cmd().(agentScreenChangedMsg); !changed {
 		t.Error("Update after the agent's screen changed does not wait for its next change")
+	}
+}
+
+func trustDialogShowsAgentScreenUntilItClosesAndToggleKeyStillWorks(t *testing.T) {
+	trustDialog := " Accessing workspace:\n\n ❯ No, exit\n   Yes, I trust this folder"
+	agent := &terminalAgentRecorder{screen: trustDialog}
+	view, _ := newAgentScreenSwitchingView(agent).Update(agentScreenChangedMsg{})
+	if view.View().Content != trustDialog {
+		t.Fatalf("view with the trust dialog on the agent's screen = %q, want the agent's screen", view.View().Content)
+	}
+	view, _ = view.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt})
+	view, _ = view.Update(agentScreenChangedMsg{})
+	if strings.Contains(view.View().Content, "Accessing workspace:") {
+		t.Error("view after alt+x and a change with the trust dialog still open shows the agent's screen")
+	}
+	view, _ = view.Update(tea.KeyPressMsg{Code: 'x', Mod: tea.ModAlt})
+	agent.screen = "Claude's own screen"
+	view, _ = view.Update(agentScreenChangedMsg{})
+	if strings.Contains(view.View().Content, agent.screen) {
+		t.Error("view after the trust dialog closed shows the agent's screen")
 	}
 }
 

@@ -40,9 +40,13 @@ func HoldsPasteLabel(text string) bool {
 	return pasteLabelPattern.MatchString(text)
 }
 
-// TextWithPastesCollapsed replaces the first occurrence of each paste, numbered from 1, with its label.
+// TextWithPastesCollapsed replaces the first occurrence of each paste, numbered from 1, with its label. An empty paste
+// keeps its number but has no label.
 func TextWithPastesCollapsed(text string, pastes []string) string {
 	for index, paste := range pastes {
+		if paste == "" {
+			continue
+		}
 		text = strings.Replace(text, paste, PasteLabel(index+1, paste), 1)
 	}
 	return text
@@ -57,25 +61,30 @@ func TextWithPastesExpanded(text string, pastes []string) string {
 	return expanded.String()
 }
 
-// TextPart is a run of typed text, or the paste a label stands for.
+// TextPart is a run of typed text, or the paste a label stands for with the paste's number.
 type TextPart struct {
 	Text    string
 	IsPaste bool
+	Number  int
 }
 
 // TextParts splits text at the first occurrence of each paste's label, numbered from 1, in the order they occur. A
-// paste whose label the text lacks has no part.
+// paste whose label the text lacks has no part, and neither has an empty paste.
 func TextParts(text string, pastes []string) []TextPart {
 	type labelPosition struct {
-		start int
-		end   int
-		paste string
+		start  int
+		end    int
+		paste  string
+		number int
 	}
 	labels := []labelPosition{}
 	for index, paste := range pastes {
+		if paste == "" {
+			continue
+		}
 		label := PasteLabel(index+1, paste)
 		if start := strings.Index(text, label); start >= 0 {
-			labels = append(labels, labelPosition{start: start, end: start + len(label), paste: paste})
+			labels = append(labels, labelPosition{start: start, end: start + len(label), paste: paste, number: index + 1})
 		}
 	}
 	slices.SortFunc(labels, func(first labelPosition, second labelPosition) int { return first.start - second.start })
@@ -85,7 +94,7 @@ func TextParts(text string, pastes []string) []TextPart {
 		if label.start > typedStart {
 			parts = append(parts, TextPart{Text: text[typedStart:label.start]})
 		}
-		parts = append(parts, TextPart{Text: label.paste, IsPaste: true})
+		parts = append(parts, TextPart{Text: label.paste, IsPaste: true, Number: label.number})
 		typedStart = label.end
 	}
 	if typedStart < len(text) {

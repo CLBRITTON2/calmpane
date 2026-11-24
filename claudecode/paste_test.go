@@ -13,6 +13,7 @@ func TestPaste(t *testing.T) {
 	t.Run("textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel",
 		textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel)
 	t.Run("textHoldsPasteLabelOnlyInPasteLabelForm", textHoldsPasteLabelOnlyInPasteLabelForm)
+	t.Run("emptyPasteKeepsItsNumberAndHasNoLabel", emptyPasteKeepsItsNumberAndHasNoLabel)
 }
 
 func textHoldsPasteLabelOnlyInPasteLabelForm(t *testing.T) {
@@ -74,8 +75,22 @@ func collapsedTextExpandsBackToSameText(t *testing.T) {
 func textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel(t *testing.T) {
 	pastes := []string{"a\nb\nc\nd", "w\nx\ny\nz", "deleted\nlabel\nof\nthis"}
 	text := "[Pasted text #2 +3 lines] before [Pasted text #1 +3 lines]"
-	want := []TextPart{{Text: "w\nx\ny\nz", IsPaste: true}, {Text: " before "}, {Text: "a\nb\nc\nd", IsPaste: true}}
+	want := []TextPart{{Text: "w\nx\ny\nz", IsPaste: true, Number: 2}, {Text: " before "},
+		{Text: "a\nb\nc\nd", IsPaste: true, Number: 1}}
 	if got := TextParts(text, pastes); !reflect.DeepEqual(got, want) {
+		t.Errorf("TextParts = %+v, want %+v", got, want)
+	}
+}
+
+func emptyPasteKeepsItsNumberAndHasNoLabel(t *testing.T) {
+	pastes := []string{"", "w\nx\ny\nz"}
+	text := "typed [Pasted text #1] and w\nx\ny\nz"
+	collapsed := TextWithPastesCollapsed(text, pastes)
+	if want := "typed [Pasted text #1] and [Pasted text #2 +3 lines]"; collapsed != want {
+		t.Errorf("collapsed = %q, want %q", collapsed, want)
+	}
+	want := []TextPart{{Text: "typed [Pasted text #1] and "}, {Text: "w\nx\ny\nz", IsPaste: true, Number: 2}}
+	if got := TextParts(collapsed, pastes); !reflect.DeepEqual(got, want) {
 		t.Errorf("TextParts = %+v, want %+v", got, want)
 	}
 }

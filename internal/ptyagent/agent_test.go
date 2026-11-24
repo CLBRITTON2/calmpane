@@ -38,7 +38,8 @@ func exitWithHelperError(helperErr error) {
 
 // fakeClaudeInputLogEnv makes the test binary act as Claude Code in a pseudo-console: it draws an input box holding
 // fakeClaudeDraft, appends each byte it reads to the file the variable names, empties the box on ctrl+u, draws a
-// picker in its place on ctrl+p, and exits with fakeClaudeExitCode on ctrl+d.
+// picker in its place on ctrl+p, draws Claude's trust dialog on ctrl+t, and on ctrl+d draws a message with a blank row
+// and trailing spaces, then exits with fakeClaudeExitCode.
 const fakeClaudeInputLogEnv = "ZEN_FAKE_CLAUDE_INPUT_LOG"
 
 const fakeClaudeDraft = "fix the tests"
@@ -72,7 +73,16 @@ func runFakeClaude(inputLog string) (err error) {
 			return err
 		}
 		if strings.Contains(string(input[:length]), "\x04") {
+			if _, err := fmt.Fprint(os.Stdout, "\x1b[2J\x1b[HClaude Code didn't start.   \r\n\r\n  Run claude again.\r\n"); err != nil {
+				return err
+			}
 			os.Exit(fakeClaudeExitCode)
+		}
+		if strings.Contains(string(input[:length]), "\x14") {
+			trustDialog := "\x1b[2J\x1b[H Accessing workspace:\r\n\r\n ❯ No, exit\r\n   Yes, I trust this folder\r\n"
+			if _, err := fmt.Fprint(os.Stdout, trustDialog); err != nil {
+				return err
+			}
 		}
 		if strings.Contains(string(input[:length]), "\x15") {
 			if err := drawFakeInputBox(""); err != nil {
@@ -101,7 +111,11 @@ func TestAgent(t *testing.T) {
 	t.Run("interruptWritesEsc", interruptWritesEsc)
 	t.Run("interruptMakesWorkingClaudeIdleUntilItsNextHook", interruptMakesWorkingClaudeIdleUntilItsNextHook)
 	t.Run("sendKeyAndPasteReachClaudeThroughEmulator", sendKeyAndPasteReachClaudeThroughEmulator)
+	t.Run("sendPromptWhileTrustDialogShowsWritesNothingAndReturnsAgentBlocked",
+		sendPromptWhileTrustDialogShowsWritesNothingAndReturnsAgentBlocked)
 	t.Run("waitForSessionIDAndSendKeyFailOnceClaudeExits", waitForSessionIDAndSendKeyFailOnceClaudeExits)
+	t.Run("waitForSessionIDErrorHoldsExitCodeAndNonBlankRowsOfLastScreen",
+		waitForSessionIDErrorHoldsExitCodeAndNonBlankRowsOfLastScreen)
 	t.Run("takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft", takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft)
 	t.Run("inputBoxShownUntilPickerTakesItsPlace", inputBoxShownUntilPickerTakesItsPlace)
 	t.Run("statusIsLastWholeHookStateAndUnknownBeforeFirstHook", statusIsLastWholeHookStateAndUnknownBeforeFirstHook)
@@ -237,6 +251,37 @@ func waitForSessionIDAndSendKeyFailOnceClaudeExits(t *testing.T) {
 	waitFor(t, "SendKey to fail", func() bool {
 		return agent.SendKey(tea.KeyPressMsg{Code: 'q', Text: "q"}) != nil
 	})
+}
+
+func waitForSessionIDErrorHoldsExitCodeAndNonBlankRowsOfLastScreen(t *testing.T) {
+	agent, _, _ := startFakeClaude(t)
+	if err := agent.write("\x04"); err != nil {
+		t.Fatal(err)
+	}
+	_, err := agent.WaitForSessionID()
+	want := "Claude exited before it started a session (exit code 7). Its last screen:\n" +
+		"Claude Code didn't start.\n  Run claude again."
+	if err == nil || err.Error() != want {
+		t.Errorf("WaitForSessionID error = %v, want %q", err, want)
+	}
+}
+
+func sendPromptWhileTrustDialogShowsWritesNothingAndReturnsAgentBlocked(t *testing.T) {
+	agent, inputLog, _ := startFakeClaude(t)
+	if err := agent.SendKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the trust dialog", func() bool {
+		screen, _ := agent.Screen()
+		return strings.Contains(screen, "Yes, I trust this folder")
+	})
+	if err := agent.SendPrompt("ship it"); !errors.Is(err, ui.ErrAgentBlocked) {
+		t.Errorf("SendPrompt error = %v, want ui.ErrAgentBlocked", err)
+	}
+	if err := agent.SendNow(); err != nil {
+		t.Fatal(err)
+	}
+	waitForInput(t, inputLog, "\x14\x18\x13")
 }
 
 func takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft(t *testing.T) {

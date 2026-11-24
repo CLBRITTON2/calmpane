@@ -12,8 +12,10 @@ import (
 	"reflect"
 	"regexp"
 	"strings"
+	"unicode"
 	"unicode/utf8"
 
+	tea "charm.land/bubbletea/v2"
 	"github.com/alecthomas/chroma/v2"
 	"github.com/alecthomas/chroma/v2/styles"
 	"github.com/charmbracelet/x/ansi"
@@ -74,9 +76,26 @@ type StatusLine struct {
 
 type Keys struct {
 	ClaudeScreen string `toml:"claude_screen"`
+	ExpandPaste  string `toml:"expand_paste"`
 }
 
 var hexColor = regexp.MustCompile(`^#[0-9a-fA-F]{6}$`)
+
+// keyCodesByName maps each name tea.Key.Keystroke writes for a key other than a printable character to its code.
+var keyCodesByName = func() map[string]rune {
+	codes := []rune{tea.KeyBackspace, tea.KeyTab, tea.KeyEnter, tea.KeyEscape, tea.KeySpace}
+	for code := tea.KeyUp; code <= tea.KeyIsoLevel5Shift; code++ {
+		codes = append(codes, code)
+	}
+	codesByName := map[string]rune{}
+	for _, code := range codes {
+		codesByName[tea.Key{Code: code}.Keystroke()] = code
+	}
+	return codesByName
+}()
+
+var keyModifiersByName = map[string]tea.KeyMod{"ctrl": tea.ModCtrl, "alt": tea.ModAlt, "shift": tea.ModShift,
+	"meta": tea.ModMeta, "hyper": tea.ModHyper, "super": tea.ModSuper}
 
 // Load reads the config file, first writing the example there when it is missing.
 func Load(file string) (Config, error) {
@@ -191,6 +210,20 @@ func checkedConfig(config Config) (Config, error) {
 	}
 	if config.Keys.ClaudeScreen == "" {
 		problems = append(problems, errors.New(`keys.claude_screen = "" names no key`))
+	}
+	// zen matches a key by the string bubbletea writes for it, so the name must be one that string can be
+	keyParts := strings.Split(config.Keys.ExpandPaste, "+")
+	keyName := []rune(keyParts[len(keyParts)-1])
+	expandPasteKey := tea.Key{Code: keyCodesByName[string(keyName)]}
+	if expandPasteKey.Code == 0 && len(keyName) == 1 && unicode.IsPrint(keyName[0]) {
+		expandPasteKey.Code = keyName[0]
+	}
+	for _, modifier := range keyParts[:len(keyParts)-1] {
+		expandPasteKey.Mod |= keyModifiersByName[modifier]
+	}
+	if expandPasteKey.Keystroke() != config.Keys.ExpandPaste {
+		problems = append(problems, fmt.Errorf("keys.expand_paste = %q is not a key name such as \"ctrl+e\"",
+			config.Keys.ExpandPaste))
 	}
 	if rest, underProfile := strings.CutPrefix(config.StatusLine.Dir, "~"); underProfile {
 		profile, err := os.UserHomeDir()

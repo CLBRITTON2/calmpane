@@ -205,7 +205,8 @@ func (a *Agent) WorkingDirectory() (string, error) {
 	return os.Getwd()
 }
 
-// Status is AgentUnknown before Claude's first hook and once it has exited.
+// Status is AgentBlocked while Claude's trust dialog waits, so no prompt's Enter answers it, and AgentUnknown before
+// Claude's first hook and once it has exited.
 func (a *Agent) Status() (ui.AgentStatus, error) {
 	select {
 	case <-a.exited:
@@ -213,7 +214,13 @@ func (a *Agent) Status() (ui.AgentStatus, error) {
 	default:
 	}
 	state, err := a.state()
-	return state.status, err
+	if err != nil {
+		return ui.AgentUnknown, err
+	}
+	if state.sessionID == "" && claudecode.TrustDialogShown(a.screenWithDimOnly()) {
+		return ui.AgentBlocked, nil
+	}
+	return state.status, nil
 }
 
 // state is the last state the hooks wrote whole, empty before the first hook.
@@ -245,7 +252,14 @@ func (a *Agent) WaitForSessionID() (string, error) {
 		}
 		select {
 		case <-a.exited:
-			return "", errors.New("Claude exited before it started a session")
+			lastScreenRows := []string{}
+			for _, row := range strings.Split(ansi.Strip(a.emulator.Render()), "\n") {
+				if text := strings.TrimRight(row, " \r"); text != "" {
+					lastScreenRows = append(lastScreenRows, text)
+				}
+			}
+			return "", fmt.Errorf("Claude exited before it started a session (exit code %d). Its last screen:\n%s",
+				a.exitCode, strings.Join(lastScreenRows, "\n"))
 		case <-time.After(300 * time.Millisecond):
 		}
 	}

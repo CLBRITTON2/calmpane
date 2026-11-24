@@ -60,3 +60,6 @@ dir = '~\AppData\Local\windows-dev\statusline'
 # The key that shows Claude's own screen in `calmpane claude`, and that the waiting row names. In herdr it must be
 # the key herdr's config binds to the zen toggle action, which calmpane cannot read.
 claude_screen = "alt+x"
+# The key that turns the paste label at the cursor in the zen input into the pasted text, which you can then edit
+# and which the sent prompt shows in place of the label. On that text, unedited, it turns the text back into the label.
+expand_paste = "ctrl+e"

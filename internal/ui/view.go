@@ -47,6 +47,11 @@ type agentStatusMsg struct {
 	status AgentStatus
 }
 
+// agentInputBoxMsg reports that the agent's input box came or went while it works.
+type agentInputBoxMsg struct {
+	shown bool
+}
+
 type clockTickMsg struct {
 	now time.Time
 }
@@ -118,6 +123,13 @@ type earlyPrompt struct {
 	queued bool
 }
 
+// expandedPaste is the text of paste number, as the expand key put it into the input at byte offset start.
+type expandedPaste struct {
+	number int
+	start  int
+	text   string
+}
+
 // copyMode holds the picked and marked code blocks as indexes into zenModel.codeBlocks.
 type copyMode struct {
 	picked int
@@ -131,6 +143,7 @@ type zenModel struct {
 	appearance appearance
 	// claudeScreenKey shows Claude's own screen, and the waiting row names it.
 	claudeScreenKey string
+	expandPasteKey  string
 	// fatal is shown alone until a key ends the view, since herdr closes the pane as soon as zen exits.
 	fatal   error
 	entries []claudecode.DialogueEntry
@@ -149,6 +162,8 @@ type zenModel struct {
 	clockTicking bool
 	// endedTurnRow reports the turn this view saw end, until Claude works or blocks again.
 	endedTurnRow string
+	// endedTurnPromptTime is the PromptTime of the last Done row's turn: work that records no new turn shows none.
+	endedTurnPromptTime time.Time
 	// status reports the latest problem in place of the agent status row, until the agent status changes.
 	status string
 	// copyStatus reports a copy in place of status until the next key or status.
@@ -163,8 +178,12 @@ type zenModel struct {
 	// entries until a prompt entry with the same text arrives.
 	earlyPrompts []earlyPrompt
 	input        textarea.Model
-	// pastes holds each paste the input shows as a label, numbered from 1 in order, until the input is sent.
-	pastes           []string
+	// pastes holds each paste the input shows as a label, numbered from 1 in order, until the input is sent. An expanded
+	// paste leaves an empty string, so the later labels keep their numbers.
+	pastes []string
+	// expandedPastes holds the expanded pastes the expand key can still turn back into their labels: an edit inside one
+	// drops it.
+	expandedPastes   []expandedPaste
 	claudeStatusLine string
 	// slashCommands holds the commands and skills on disk, none until they are read.
 	slashCommands []claudecode.SlashCommand
@@ -175,6 +194,9 @@ type zenModel struct {
 	slashMenu *slashMenu
 	// agentPickerShown is set while the agent shows a picker or dialog in place of its input box after a slash command.
 	agentPickerShown bool
+	// agentInputBoxGone is set while the agent works with no input box, as when a dialog herdr does not report as
+	// blocked waits for the user.
+	agentInputBoxGone bool
 }
 
 // Shift+Enter inserts a newline, since Enter sends.
@@ -200,8 +222,9 @@ func NewPromptInput() textarea.Model {
 	return input
 }
 
-func newZenModel(agent Agent, appearance appearance, claudeScreenKey string, slashHistoryFile string) zenModel {
-	return zenModel{agent: agent, appearance: appearance, claudeScreenKey: claudeScreenKey,
+func newZenModel(agent Agent, appearance appearance, claudeScreenKey string, expandPasteKey string,
+	slashHistoryFile string) zenModel {
+	return zenModel{agent: agent, appearance: appearance, claudeScreenKey: claudeScreenKey, expandPasteKey: expandPasteKey,
 		entries: []claudecode.DialogueEntry{}, entryRows: [][]string{}, input: NewPromptInput(),
 		slashCommands: []claudecode.SlashCommand{}, slashUses: []SlashUse{}, slashHistoryFile: slashHistoryFile}
 }
@@ -210,7 +233,7 @@ func newZenModel(agent Agent, appearance appearance, claudeScreenKey string, sla
 // settings may not hold a valid config. A draftErr shows on the status line, over an empty input.
 func RunZenView(agent Agent, settings config.Config, draft Draft, draftErr error, saveDraft func(draft Draft) error,
 	slashHistoryFile string, startErr error) error {
-	model := newZenModel(agent, appearance{}, settings.Keys.ClaudeScreen, slashHistoryFile)
+	model := newZenModel(agent, appearance{}, settings.Keys.ClaudeScreen, settings.Keys.ExpandPaste, slashHistoryFile)
 	model.fatal = startErr
 	if startErr == nil {
 		model.appearance, model.fatal = newAppearance(settings)
@@ -371,9 +394,11 @@ func LineNumberAt(file io.ReaderAt, offset int64) (int, error) {
 	}
 }
 
-// pollAgentStatus keeps polling after a failure, since the view keeps running.
+// pollAgentStatus keeps polling after a failure, since the view keeps running. While the agent works it also polls
+// for the input box, since a dialog in place of the box can leave the agent reported as working.
 func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 	lastStatus := AgentUnknown
+	lastInputBoxShown := true
 	for {
 		agentStatus, err := agent.Status()
 		if err != nil {
@@ -381,6 +406,18 @@ func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 		} else if agentStatus != lastStatus {
 			lastStatus = agentStatus
 			send(agentStatusMsg{status: agentStatus})
+		}
+		inputBoxShown := true
+		if lastStatus == AgentWorking {
+			inputBoxShown, err = agent.InputBoxShown()
+			if err != nil {
+				send(problemMsg{err: err})
+				inputBoxShown = lastInputBoxShown
+			}
+		}
+		if inputBoxShown != lastInputBoxShown {
+			lastInputBoxShown = inputBoxShown
+			send(agentInputBoxMsg{shown: inputBoxShown})
 		}
 		time.Sleep(300 * time.Millisecond)
 	}
@@ -481,10 +518,11 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.agentStatus == AgentWorking || m.agentStatus == AgentBlocked {
 			return m, nil
 		}
-		m.endedTurnRow = "Done"
-		if !m.turn.PromptTime.IsZero() {
-			m.endedTurnRow += " · " + TurnDuration(max(msg.now.Sub(m.turn.PromptTime), 0))
+		if m.turn.PromptTime.Equal(m.endedTurnPromptTime) {
+			return m, nil
 		}
+		m.endedTurnPromptTime = m.turn.PromptTime
+		m.endedTurnRow = "Done · " + TurnDuration(max(msg.now.Sub(m.turn.PromptTime), 0))
 		return m.withVisibleRowsDrawn(), nil
 	case agentInputTakenMsg:
 		if msg.err != nil {
@@ -514,6 +552,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.rowsBelowView = 0
 		m.turn = claudecode.CurrentTurn{}
 		m.endedTurnRow = ""
+		m.endedTurnPromptTime = time.Time{}
 		return m.withVisibleRowsDrawn(), nil
 	case slashCommandsLoadedMsg:
 		if msg.err != nil {
@@ -527,6 +566,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = m.appearance.errorStyle.Render(msg.err.Error())
 		}
 		return m, nil
+	case agentInputBoxMsg:
+		m.agentInputBoxGone = !msg.shown
+		return m.withVisibleRowsDrawn(), nil
 	case agentPickerShownMsg:
 		m.agentPickerShown = true
 		return m.withVisibleRowsDrawn(), waitForAgentInputBox(m.agent, msg.prompt)
@@ -685,18 +727,37 @@ func (m zenModel) withKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 	case "esc":
 		// Claude takes Esc twice in a row while idle as the rewind menu, which would wait unseen behind the zen view
 		if m.agentStatus != AgentWorking {
-			return m, nil
+			m.pastes = nil
+			m.expandedPastes = nil
+			m.input.Reset()
+			return m.withVisibleRowsDrawn(), nil
 		}
 		m.interrupting = true
 		return m, func() tea.Msg {
 			return claudeKeysSentMsg{err: m.agent.Interrupt()}
 		}
+	case m.expandPasteKey:
+		cursor := m.inputCursorOffset()
+		collapsible := slices.IndexFunc(m.expandedPastes, func(expanded expandedPaste) bool {
+			return expanded.start <= cursor && cursor < expanded.start+len(expanded.text)
+		})
+		if collapsible < 0 {
+			collapsible = slices.IndexFunc(m.expandedPastes, func(expanded expandedPaste) bool {
+				return cursor == expanded.start+len(expanded.text)
+			})
+		}
+		if collapsible < 0 {
+			return m.withPasteLabelAtCursorExpanded(cursor), nil
+		}
+		return m.withExpandedPasteCollapsed(collapsible, cursor), nil
 	}
 	formerInput := m.input.Value()
+	formerCursor := m.inputCursorOffset()
 	var inputCmd tea.Cmd
 	m.input, inputCmd = m.input.Update(msg)
 	// the entries take the rows the input gives up
-	return m.withSlashMenuFollowingInput(formerInput).withVisibleRowsDrawn(), inputCmd
+	return m.withExpandedPastesFollowingEdit(formerInput, formerCursor).withSlashMenuFollowingInput(formerInput).
+		withVisibleRowsDrawn(), inputCmd
 }
 
 // withSlashMenuFollowingInput opens the menu on a / typed into the empty input when it has a command to list, and
@@ -865,8 +926,100 @@ func (m zenModel) withPromptPutBack(prompt string, pastes []string) zenModel {
 		restored += "\n" + typedSince
 	}
 	m.pastes = append(slices.Clone(pastes), m.pastes...)
+	m.expandedPastes = nil
 	m.input.SetValue(claudecode.TextWithPastesCollapsed(restored, m.pastes))
 	return m.withEarlyPromptRemoved(strings.TrimSpace(prompt))
+}
+
+// inputCursorOffset is the byte offset of the input's cursor in its value.
+func (m zenModel) inputCursorOffset() int {
+	lines := strings.Split(m.input.Value(), "\n")
+	cursor := len(string([]rune(lines[m.input.Line()])[:m.input.Column()]))
+	for _, line := range lines[:m.input.Line()] {
+		cursor += len(line) + 1
+	}
+	return cursor
+}
+
+// withPasteLabelAtCursorExpanded replaces the label the cursor is on, or else the one directly before it, with its
+// paste as typed text, and puts the cursor after that text.
+func (m zenModel) withPasteLabelAtCursorExpanded(cursor int) zenModel {
+	value := m.input.Value()
+	expanded := claudecode.TextPart{}
+	labelStart, labelEnd := 0, 0
+	partStart := 0
+	for _, part := range claudecode.TextParts(value, m.pastes) {
+		partEnd := partStart + len(part.Text)
+		if part.IsPaste {
+			partEnd = partStart + len(claudecode.PasteLabel(part.Number, part.Text))
+		}
+		cursorOnLabel := part.IsPaste && partStart <= cursor && cursor < partEnd
+		if cursorOnLabel || (part.IsPaste && cursor == partEnd) {
+			expanded, labelStart, labelEnd = part, partStart, partEnd
+		}
+		if cursorOnLabel {
+			break
+		}
+		partStart = partEnd
+	}
+	if !expanded.IsPaste {
+		return m
+	}
+	m.pastes = slices.Clone(m.pastes)
+	m.pastes[expanded.Number-1] = ""
+	m.input.SetValue(value[labelEnd:])
+	m.input.MoveToBegin()
+	m.input.InsertString(value[:labelStart] + expanded.Text)
+	m = m.withExpandedPastesFollowingEdit(value, cursor)
+	m.expandedPastes = append(m.expandedPastes, expandedPaste{number: expanded.Number, start: labelStart, text: expanded.Text})
+	return m.withVisibleRowsDrawn()
+}
+
+func (m zenModel) withExpandedPasteCollapsed(index int, cursor int) zenModel {
+	collapsed := m.expandedPastes[index]
+	value := m.input.Value()
+	m.pastes = slices.Clone(m.pastes)
+	m.pastes[collapsed.number-1] = collapsed.text
+	m.expandedPastes = slices.Delete(slices.Clone(m.expandedPastes), index, index+1)
+	m.input.SetValue(value[collapsed.start+len(collapsed.text):])
+	m.input.MoveToBegin()
+	m.input.InsertString(value[:collapsed.start] + claudecode.PasteLabel(collapsed.number, collapsed.text))
+	return m.withExpandedPastesFollowingEdit(value, cursor).withVisibleRowsDrawn()
+}
+
+// withExpandedPastesFollowingEdit moves each expanded paste after the edit that turned formerInput into the input, and
+// drops the ones the edit reached into. The edit is what lies between the text the two values share before and after
+// the cursor, since a key edits the input at its cursor and the shared text alone can match either side of a repeat.
+func (m zenModel) withExpandedPastesFollowingEdit(formerInput string, formerCursor int) zenModel {
+	input := m.input.Value()
+	if input == formerInput || len(m.expandedPastes) == 0 {
+		return m
+	}
+	cursor := m.inputCursorOffset()
+	sharedPrefix := 0
+	for sharedPrefix < min(formerCursor, cursor) && formerInput[sharedPrefix] == input[sharedPrefix] {
+		sharedPrefix++
+	}
+	sharedSuffix := 0
+	for sharedSuffix < min(len(formerInput)-formerCursor, len(input)-cursor) &&
+		formerInput[len(formerInput)-1-sharedSuffix] == input[len(input)-1-sharedSuffix] {
+		sharedSuffix++
+	}
+	editStart, editEnd := sharedPrefix, len(formerInput)-sharedSuffix
+	followed := []expandedPaste{}
+	for _, expanded := range m.expandedPastes {
+		end := expanded.start + len(expanded.text)
+		editReachesIn := editStart < end && editEnd > expanded.start
+		if editReachesIn {
+			continue
+		}
+		if editEnd <= expanded.start {
+			expanded.start += len(input) - len(formerInput)
+		}
+		followed = append(followed, expanded)
+	}
+	m.expandedPastes = followed
+	return m
 }
 
 func (m zenModel) InputText() string {
@@ -885,14 +1038,16 @@ func (m zenModel) withDraftRestored(draft Draft, draftErr error) zenModel {
 
 func (m zenModel) withPasteInserted(content string) (zenModel, tea.Cmd) {
 	paste := claudecode.NormalizedPaste(content)
+	formerInput := m.input.Value()
+	formerCursor := m.inputCursorOffset()
 	if !claudecode.IsShownAsLabel(paste) {
 		var inputCmd tea.Cmd
 		m.input, inputCmd = m.input.Update(tea.PasteMsg{Content: content})
-		return m.withVisibleRowsDrawn(), inputCmd
+		return m.withExpandedPastesFollowingEdit(formerInput, formerCursor).withVisibleRowsDrawn(), inputCmd
 	}
 	m.pastes = append(slices.Clone(m.pastes), paste)
 	m.input.InsertString(claudecode.PasteLabel(len(m.pastes), paste))
-	return m.withVisibleRowsDrawn(), nil
+	return m.withExpandedPastesFollowingEdit(formerInput, formerCursor).withVisibleRowsDrawn(), nil
 }
 
 // Claude's own view drops a prompt an Esc cancelled before the reply.
@@ -918,6 +1073,7 @@ func (m zenModel) withCancelledPromptRestored(prompt string) zenModel {
 func (m zenModel) withInputSent(prompt string) zenModel {
 	pastes := m.pastes
 	m.pastes = nil
+	m.expandedPastes = nil
 	m.input.Reset()
 	m = m.withVisibleRowsDrawn()
 	bandText := strings.TrimSpace(prompt)
@@ -1112,7 +1268,8 @@ func (m zenModel) shownStatus() string {
 	if m.copyStatus != "" {
 		return m.copyStatus
 	}
-	if m.agentPickerShown {
+	waitingOnDialogReportedAsWorking := m.agentStatus == AgentWorking && m.agentInputBoxGone
+	if m.agentPickerShown || waitingOnDialogReportedAsWorking {
 		return statusLine(AgentBlocked, m.turn, m.now, m.width, m.appearance, m.claudeScreenKey)
 	}
 	if m.draftStatus != "" {

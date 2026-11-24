@@ -18,6 +18,10 @@ func TestParse(t *testing.T) {
 	t.Run("wideLineCharacterFailsNamingFieldAndValue", wideLineCharacterFailsNamingFieldAndValue)
 	t.Run("badCommentStyleFailsNamingFieldAndValue", badCommentStyleFailsNamingFieldAndValue)
 	t.Run("emptyClaudeScreenKeyFailsNamingField", emptyClaudeScreenKeyFailsNamingField)
+	t.Run("missingExpandPasteKeyFailsNamingField", missingExpandPasteKeyFailsNamingField)
+	t.Run("expandPasteKeyNotWrittenAsBubbleteaKeyFailsNamingFieldAndValue",
+		expandPasteKeyNotWrittenAsBubbleteaKeyFailsNamingFieldAndValue)
+	t.Run("expandPasteKeyWrittenAsBubbleteaKeyParses", expandPasteKeyWrittenAsBubbleteaKeyParses)
 	t.Run("emptyStatusLineDirStaysEmpty", emptyStatusLineDirStaysEmpty)
 }
 
@@ -36,7 +40,7 @@ func exampleParsesToRosePineWithStatusLineDirUnderProfile(t *testing.T) {
 		Lines:      Lines{Separator: "─", CodeRule: "─"},
 		Code:       Code{Theme: "rose-pine", Comment: "bold #c4a7e7"},
 		StatusLine: StatusLine{Dir: filepath.Join(profile, `AppData\Local\windows-dev\statusline`)},
-		Keys:       Keys{ClaudeScreen: "alt+x"},
+		Keys:       Keys{ClaudeScreen: "alt+x", ExpandPaste: "ctrl+e"},
 	}
 	got, err := Example()
 	if err != nil {
@@ -120,6 +124,30 @@ func badCommentStyleFailsNamingFieldAndValue(t *testing.T) {
 
 func emptyClaudeScreenKeyFailsNamingField(t *testing.T) {
 	assertParseFailsWith(t, exampleWith(t, `claude_screen = "alt+x"`, `claude_screen = ""`), []string{`keys.claude_screen = ""`})
+}
+
+func missingExpandPasteKeyFailsNamingField(t *testing.T) {
+	assertParseFailsWith(t, exampleWith(t, `expand_paste = "ctrl+e"`, ""), []string{"missing field keys.expand_paste"})
+}
+
+func expandPasteKeyNotWrittenAsBubbleteaKeyFailsNamingFieldAndValue(t *testing.T) {
+	for _, key := range []string{"", "ctrl+", "control+e", "shift+ctrl+e", "ctrl+ctrl+e", "ctrl+enterr", "ctrl+ee", " "} {
+		assertParseFailsWith(t, exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`),
+			[]string{`keys.expand_paste = "` + key + `" is not a key name`})
+	}
+}
+
+func expandPasteKeyWrittenAsBubbleteaKeyParses(t *testing.T) {
+	for _, key := range []string{"ctrl+o", "alt+enter", "f5", "ctrl+shift+up", "ctrl+space", "?"} {
+		got, err := Parse(exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`))
+		if err != nil {
+			t.Errorf("Parse with expand_paste %q: %v", key, err)
+			continue
+		}
+		if got.Keys.ExpandPaste != key {
+			t.Errorf("keys.expand_paste = %q, want %q", got.Keys.ExpandPaste, key)
+		}
+	}
 }
 
 func emptyStatusLineDirStaysEmpty(t *testing.T) {

@@ -188,7 +188,7 @@ func corruptHistoryShowsErrorOnStatusLineAndKeepsDiskCommands(t *testing.T) {
 	if err == nil {
 		t.Fatal("SavedSlashUses of a corrupt file gave no error")
 	}
-	model := newZenModel(nil, testAppearance, "alt+x", historyFile).withSize(200, 20)
+	model := newZenModel(nil, testAppearance, "alt+x", "ctrl+e", historyFile).withSize(200, 20)
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: slashTestCommands, uses: nil, err: err})
 	if shownError := ansi.Strip(loaded.(zenModel).shownStatus()); shownError != err.Error() {
 		t.Errorf("status = %q, want %q", shownError, err.Error())
@@ -204,7 +204,7 @@ func typedKey(letter rune) tea.KeyPressMsg {
 
 func modelWithSlashCommands(t *testing.T, agent Agent) zenModel {
 	t.Helper()
-	model := newZenModel(agent, testAppearance, "alt+x", filepath.Join(t.TempDir(), "slash-history.json"))
+	model := newZenModel(agent, testAppearance, "alt+x", "ctrl+e", filepath.Join(t.TempDir(), "slash-history.json"))
 	model = model.withSize(60, 20).withEntries([]claudecode.DialogueEntry{{Kind: claudecode.ReplyEntry, Text: "Ready."}}, nil)
 	model.slashCommands = slashTestCommands
 	model.claudeStatusLine = "Opus · ctx 12%"
@@ -328,7 +328,7 @@ func deletingSlashClosesMenu(t *testing.T) {
 }
 
 func slashOpensNoMenuWithNoCommandsOnDiskAndEmptyHistory(t *testing.T) {
-	model := newZenModel(nil, testAppearance, "alt+x", "").withSize(60, 20)
+	model := newZenModel(nil, testAppearance, "alt+x", "ctrl+e", "").withSize(60, 20)
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: []claudecode.SlashCommand{}, uses: []SlashUse{}, err: nil})
 	if typed := pressedKeys(t, loaded.(zenModel), typedKey('/')); typed.slashMenu != nil {
 		t.Error("/ opened a menu with no command on disk and an empty history")
@@ -336,7 +336,7 @@ func slashOpensNoMenuWithNoCommandsOnDiskAndEmptyHistory(t *testing.T) {
 }
 
 func loadedDiskCommandsAndHistoryFillMenu(t *testing.T) {
-	model := newZenModel(nil, testAppearance, "alt+x", "").withSize(60, 20)
+	model := newZenModel(nil, testAppearance, "alt+x", "ctrl+e", "").withSize(60, 20)
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: []claudecode.SlashCommand{
 		{Name: "tidy", Description: "Tidy the imports (user)"},
 	}, uses: []SlashUse{{Name: "effort", Count: 1, Last: time.Now()}}, err: nil})
