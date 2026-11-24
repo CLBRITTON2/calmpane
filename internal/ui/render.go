@@ -71,6 +71,7 @@ func newAppearance(settings config.Config) (appearance, error) {
 	replyStyle.Code = ansi.StyleBlock{StylePrimitive: ansi.StylePrimitive{Color: &colors.InlineCode}}
 	replyStyle.Link = ansi.StylePrimitive{Color: &colors.Link, Underline: replyStyle.Link.Underline}
 	replyStyle.LinkText = ansi.StylePrimitive{Color: &colors.Link, Bold: replyStyle.LinkText.Bold}
+	replyStyle.Strong = ansi.StylePrimitive{Color: &colors.Strong, Bold: replyStyle.Strong.Bold}
 	replyStyle.CodeBlock.Chroma = nil
 	replyStyle.CodeBlock.Theme = settings.Code.Theme
 	return appearance{

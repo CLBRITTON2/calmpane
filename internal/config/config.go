@@ -45,6 +45,7 @@ type Colors struct {
 	Heading      string `toml:"heading"`
 	InlineCode   string `toml:"inline_code"`
 	Link         string `toml:"link"`
+	Strong       string `toml:"strong"`
 	Question     string `toml:"question"`
 	Option       string `toml:"option"`
 	Working      string `toml:"working"`

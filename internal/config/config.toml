@@ -18,6 +18,8 @@ heading = "#c4a7e7"
 inline_code = "#f6c177"
 # A reply's links.
 link = "#9ccfd8"
+# Bold text in a reply, written **like this**.
+strong = "#e0def4"
 # A question Claude asks.
 question = "#f6c177"
 # The options under a question.

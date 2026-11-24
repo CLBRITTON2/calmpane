@@ -33,8 +33,8 @@ func exampleParsesToRosePineWithStatusLineDirUnderProfile(t *testing.T) {
 	want := Config{
 		Colors: Colors{
 			PromptBand: "#26233a", PromptMarker: "#c4a7e7", PromptText: "#e0def4", PromptNote: "#6e6a86",
-			ReplyText: "#e0def4", Heading: "#c4a7e7", InlineCode: "#f6c177", Link: "#9ccfd8", Question: "#f6c177",
-			Option: "#908caa", Working: "#6e6a86", Waiting: "#f6c177", Done: "#9ccfd8", Error: "#eb6f92",
+			ReplyText: "#e0def4", Heading: "#c4a7e7", InlineCode: "#f6c177", Link: "#9ccfd8", Strong: "#e0def4",
+			Question: "#f6c177", Option: "#908caa", Working: "#6e6a86", Waiting: "#f6c177", Done: "#9ccfd8", Error: "#eb6f92",
 			Separator: "#403d52", CodeRule: "#403d52", CodeLabel: "#6e6a86",
 		},
 		Lines:      Lines{Separator: "─", CodeRule: "─"},

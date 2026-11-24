@@ -47,6 +47,7 @@ func TestEntryRows(t *testing.T) {
 	t.Run("queuedPromptIsUnqueuedBandThenMutedNoteRowWithoutOverlay", queuedPromptIsUnqueuedBandThenMutedNoteRowWithoutOverlay)
 	t.Run("replyRowsDropHeadingAndCodeMarkers", replyRowsDropHeadingAndCodeMarkers)
 	t.Run("replyRowsDrawInlineCodeWithoutBackground", replyRowsDrawInlineCodeWithoutBackground)
+	t.Run("replyRowsDrawStrongTextBoldInStrongColor", replyRowsDrawStrongTextBoldInStrongColor)
 	t.Run("questionRowsNumberOptionsFromOne", questionRowsNumberOptionsFromOne)
 	t.Run("replyRowsIndentTabIndentedCodeWithSpaces", replyRowsIndentTabIndentedCodeWithSpaces)
 	t.Run("promptRowsShowEachPasteAsItsLabel", promptRowsShowEachPasteAsItsLabel)
@@ -179,6 +180,26 @@ func replyRowsDrawInlineCodeWithoutBackground(t *testing.T) {
 	}
 	if joined := strings.Join(rows, "\n"); strings.Contains(joined, "48;") {
 		t.Errorf("reply rows = %q, want no background color", joined)
+	}
+}
+
+func replyRowsDrawStrongTextBoldInStrongColor(t *testing.T) {
+	settings := exampleSettings(t)
+	settings.Colors.Strong = "#eb6f92"
+	drawn := appearanceFrom(t, settings)
+	replyRenderer, err := NewReplyRenderer(drawn, 60)
+	if err != nil {
+		t.Fatalf("NewReplyRenderer: %v", err)
+	}
+	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run it **now** please."},
+		nil, 60, replyRenderer, drawn)
+	if err != nil {
+		t.Fatalf("EntryRows: %v", err)
+	}
+	// love #eb6f92 as a 24-bit foreground, then bold
+	boldLove := "\x1b[38;2;235;111;146;1m"
+	if joined := strings.Join(rows, "\n"); !strings.Contains(joined, boldLove+"now") {
+		t.Errorf("reply rows = %q, want now in bold love %q", joined, boldLove)
 	}
 }
 
