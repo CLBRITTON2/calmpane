@@ -37,7 +37,8 @@ with Claude's exit code when Claude exits.
 | enter        | Send the prompt                                                   |
 | shift+enter  | New line                                                          |
 | ctrl+enter   | Send the prompt now, even while Claude works                      |
-| esc          | Interrupt Claude while it works                                   |
+| esc          | Interrupt Claude while it works, otherwise clear the input        |
+| ctrl+e       | Expand the paste label at the cursor, or collapse it back         |
 | ctrl+y       | Open copy mode to copy any code block, or several                 |
 | up, down     | Move the cursor, or scroll three rows from the input's edge rows  |
 | pgup, pgdown | Scroll a page                                                     |
@@ -54,7 +55,7 @@ field calmpane does not know, a missing field or a bad value stops the view with
 - `[code]`: the [chroma](https://github.com/alecthomas/chroma/tree/master/styles) style that highlights code blocks,
   and the style of their comments.
 - `[status_line]`: the folder Claude's status line command writes to, shown under the separator.
-- `[keys]`: the key that shows Claude's own screen.
+- `[keys]`: the key that shows Claude's own screen, and the key that expands and collapses paste labels.
 
 ## Reading Claude Code transcripts from Go
 
