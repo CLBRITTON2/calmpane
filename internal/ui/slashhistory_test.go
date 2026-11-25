@@ -2,18 +2,21 @@ package ui
 
 import (
 	"path/filepath"
-	"reflect"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/require"
 )
 
 var slashTestNow = time.Date(2026, 11, 23, 12, 0, 0, 0, time.UTC)
 
 func TestSlashHistory(t *testing.T) {
 	t.Run("useCountsOneMoreUnderItsNameAndPutsItFirst", useCountsOneMoreUnderItsNameAndPutsItFirst)
+	t.Run("useAtThousandInAllKeepsEveryCount", useAtThousandInAllKeepsEveryCount)
 	t.Run("usePastThousandInAllHalvesEveryCountAndDropsZeros", usePastThousandInAllHalvesEveryCountAndDropsZeros)
 	t.Run("boostGrowsFourPerDoublingOfCountWeightedByAge", boostGrowsFourPerDoublingOfCountWeightedByAge)
-	t.Run("writtenUsesReadBackAndMissingFileGivesNone", writtenUsesReadBackAndMissingFileGivesNone)
+	t.Run("missingFileGivesNoUses", missingFileGivesNoUses)
+	t.Run("writtenUsesReadBack", writtenUsesReadBack)
 }
 
 func useCountsOneMoreUnderItsNameAndPutsItFirst(t *testing.T) {
@@ -22,23 +25,23 @@ func useCountsOneMoreUnderItsNameAndPutsItFirst(t *testing.T) {
 	uses = SlashUsesAfterUse(uses, "model", second)
 	uses = SlashUsesAfterUse(uses, "usage", third)
 	want := []SlashUse{{Name: "usage", Count: 2, Last: third}, {Name: "model", Count: 1, Last: second}}
-	if !reflect.DeepEqual(uses, want) {
-		t.Errorf("uses = %+v, want %+v", uses, want)
-	}
+	require.Equal(t, want, uses)
+}
+
+func useAtThousandInAllKeepsEveryCount(t *testing.T) {
+	earlier := slashTestNow.Add(-time.Hour)
+	atThousand := []SlashUse{{Name: "usage", Count: 998, Last: earlier}, {Name: "model", Count: 1, Last: earlier}}
+	uses := SlashUsesAfterUse(atThousand, "effort", slashTestNow)
+	require.Len(t, uses, 3)
+	require.Equal(t, 998, uses[1].Count)
 }
 
 func usePastThousandInAllHalvesEveryCountAndDropsZeros(t *testing.T) {
 	earlier := slashTestNow.Add(-time.Hour)
-	atThousand := []SlashUse{{Name: "usage", Count: 998, Last: earlier}, {Name: "model", Count: 1, Last: earlier}}
-	if uses := SlashUsesAfterUse(atThousand, "effort", slashTestNow); len(uses) != 3 || uses[1].Count != 998 {
-		t.Errorf("uses at a total of 1000 = %+v, want the counts kept", uses)
-	}
 	pastThousand := []SlashUse{{Name: "usage", Count: 999, Last: earlier}, {Name: "model", Count: 1, Last: earlier}}
 	uses := SlashUsesAfterUse(pastThousand, "effort", slashTestNow)
 	want := []SlashUse{{Name: "usage", Count: 499, Last: earlier}}
-	if !reflect.DeepEqual(uses, want) {
-		t.Errorf("uses past a total of 1000 = %+v, want %+v", uses, want)
-	}
+	require.Equal(t, want, uses)
 }
 
 func boostGrowsFourPerDoublingOfCountWeightedByAge(t *testing.T) {
@@ -51,29 +54,23 @@ func boostGrowsFourPerDoublingOfCountWeightedByAge(t *testing.T) {
 	}
 	// 4 times log2 of count times weight plus one, rounded down: 4×16+1, 4×8+1, 4×2+1, 4+1, 8+1
 	want := map[string]int{"within-hour": 24, "within-day": 20, "within-week": 12, "older": 8, "older-twice": 12}
-	if boosts := SlashBoosts(uses, slashTestNow); !reflect.DeepEqual(boosts, want) {
-		t.Errorf("boosts = %v, want %v", boosts, want)
-	}
+	boosts := SlashBoosts(uses, slashTestNow)
+	require.Equal(t, want, boosts)
 }
 
-func writtenUsesReadBackAndMissingFileGivesNone(t *testing.T) {
+func missingFileGivesNoUses(t *testing.T) {
 	historyFile := filepath.Join(t.TempDir(), "calmpane", "slash-history.json")
 	missing, err := SavedSlashUses(historyFile)
-	if err != nil {
-		t.Fatalf("SavedSlashUses of a missing file: %v", err)
-	}
-	if len(missing) != 0 {
-		t.Errorf("uses of a missing file = %+v, want none", missing)
-	}
+	require.NoError(t, err)
+	require.Empty(t, missing)
+}
+
+func writtenUsesReadBack(t *testing.T) {
+	historyFile := filepath.Join(t.TempDir(), "calmpane", "slash-history.json")
 	uses := []SlashUse{{Name: "usage", Count: 3, Last: slashTestNow}}
-	if err := WriteSlashUses(historyFile, uses); err != nil {
-		t.Fatalf("WriteSlashUses: %v", err)
-	}
+	writeErr := WriteSlashUses(historyFile, uses)
+	require.NoError(t, writeErr)
 	saved, err := SavedSlashUses(historyFile)
-	if err != nil {
-		t.Fatalf("SavedSlashUses: %v", err)
-	}
-	if !reflect.DeepEqual(saved, uses) {
-		t.Errorf("saved uses = %+v, want %+v", saved, uses)
-	}
+	require.NoError(t, err)
+	require.Equal(t, uses, saved)
 }

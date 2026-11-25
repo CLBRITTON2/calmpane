@@ -1,11 +1,9 @@
 package zenmode
 
 import (
-	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
-	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -13,6 +11,7 @@ import (
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -24,49 +23,59 @@ func testMode(t *testing.T) Mode {
 	return Mode{stateDir: t.TempDir(), session: "zentest", mutexName: `Local\zen-test.` + t.Name()}
 }
 
-func TestZenPaneAction(t *testing.T) {
-	t.Run("zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne",
-		zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne)
+func herdrCallsStartingWith(herdrCalls []string, prefix string) []string {
+	var matching []string
+	for _, call := range herdrCalls {
+		if strings.HasPrefix(call, prefix) {
+			matching = append(matching, call)
+		}
+	}
+	return matching
 }
 
-func zenPaneActionOpensViewOnlyForClaudePaneWithoutOneAndShowsExistingOne(t *testing.T) {
-	cases := []struct {
-		name  string
-		panes []herdr.Pane
-		want  zenPaneAction
-	}{
-		{
-			name:  "Claude pane without a zen pane",
-			panes: []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ClaudePane("w1:p2", false), herdrtest.ZenPane("w1:p3", "w1:p2", false)},
-			want:  zenPaneAction{Kind: zenPaneActionOpen, ClaudePaneID: "w1:p1"},
-		},
-		{
-			name:  "Claude pane with a zen pane",
-			panes: []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p3", "w1:p1", false)},
-			want:  zenPaneAction{Kind: zenPaneActionShow, ClaudePaneID: "w1:p1", ZenPaneID: "w1:p3"},
-		},
-		{
-			name:  "shell pane",
-			panes: []herdr.Pane{{PaneID: "w1:p1", Focused: true}, herdrtest.ClaudePane("w1:p2", false)},
-			want:  zenPaneAction{Kind: zenPaneActionNone},
-		},
-		{
-			name:  "zen pane",
-			panes: []herdr.Pane{herdrtest.ClaudePane("w1:p1", false), herdrtest.ZenPane("w1:p3", "w1:p1", true)},
-			want:  zenPaneAction{Kind: zenPaneActionNone},
-		},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			got, err := ZenPaneActionForFocusedPane(testCase.panes)
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != testCase.want {
-				t.Errorf("ZenPaneActionForFocusedPane = %+v, want %+v", got, testCase.want)
-			}
-		})
-	}
+func assertNoDraftFile(t *testing.T, mode Mode, claudePaneID string) {
+	draftFile := mode.DraftFile(claudePaneID)
+	_, statErr := os.Stat(draftFile)
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
+}
+
+func TestZenPaneAction(t *testing.T) {
+	t.Run("zenPaneActionOpensViewForFocusedClaudePaneWithoutZenPane", zenPaneActionOpensViewForFocusedClaudePaneWithoutZenPane)
+	t.Run("zenPaneActionShowsZenPaneOfFocusedClaudePane", zenPaneActionShowsZenPaneOfFocusedClaudePane)
+	t.Run("zenPaneActionIsNoneForFocusedShellPane", zenPaneActionIsNoneForFocusedShellPane)
+	t.Run("zenPaneActionIsNoneForFocusedZenPane", zenPaneActionIsNoneForFocusedZenPane)
+}
+
+func zenPaneActionOpensViewForFocusedClaudePaneWithoutZenPane(t *testing.T) {
+	panes := []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ClaudePane("w1:p2", false), herdrtest.ZenPane("w1:p3", "w1:p2", false)}
+	action, err := ZenPaneActionForFocusedPane(panes)
+	require.NoError(t, err)
+	want := zenPaneAction{Kind: zenPaneActionOpen, ClaudePaneID: "w1:p1"}
+	require.Equal(t, want, action)
+}
+
+func zenPaneActionShowsZenPaneOfFocusedClaudePane(t *testing.T) {
+	panes := []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p3", "w1:p1", false)}
+	action, err := ZenPaneActionForFocusedPane(panes)
+	require.NoError(t, err)
+	want := zenPaneAction{Kind: zenPaneActionShow, ClaudePaneID: "w1:p1", ZenPaneID: "w1:p3"}
+	require.Equal(t, want, action)
+}
+
+func zenPaneActionIsNoneForFocusedShellPane(t *testing.T) {
+	panes := []herdr.Pane{{PaneID: "w1:p1", Focused: true}, herdrtest.ClaudePane("w1:p2", false)}
+	action, err := ZenPaneActionForFocusedPane(panes)
+	require.NoError(t, err)
+	want := zenPaneAction{Kind: zenPaneActionNone}
+	require.Equal(t, want, action)
+}
+
+func zenPaneActionIsNoneForFocusedZenPane(t *testing.T) {
+	panes := []herdr.Pane{herdrtest.ClaudePane("w1:p1", false), herdrtest.ZenPane("w1:p3", "w1:p1", true)}
+	action, err := ZenPaneActionForFocusedPane(panes)
+	require.NoError(t, err)
+	want := zenPaneAction{Kind: zenPaneActionNone}
+	require.Equal(t, want, action)
 }
 
 func TestFocusHook(t *testing.T) {
@@ -78,27 +87,23 @@ func TestFocusHook(t *testing.T) {
 func focusHookDoesNothingWhileZenModeIsOff(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
-	if err := ShowFocusedZenView(cli, mode); err != nil {
-		t.Fatal(err)
-	}
-	if got := calls(); len(got) != 0 {
-		t.Errorf("herdr calls = %q, want none", got)
-	}
+	err := ShowFocusedZenView(cli, mode)
+	require.NoError(t, err)
+	herdrCalls := calls()
+	require.Empty(t, herdrCalls)
 }
 
 func focusHookShowsExistingZenPaneOfFocusedClaudePane(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p3", "w1:p1", false)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := ShowFocusedZenView(cli, mode); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	showErr := ShowFocusedZenView(cli, mode)
+	require.NoError(t, showErr)
+	herdrCalls := calls()
+	wantCalls := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func TestFocusAgent(t *testing.T) {
@@ -111,13 +116,11 @@ func TestFocusAgent(t *testing.T) {
 func focusAgentFocusesNumberedAgentWhileZenModeIsOff(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ClaudePane("w2:p1", false)})
 	mode := testMode(t)
-	if err := FocusAgentOrItsZenPane(cli, mode, 2); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"agent list", "agent focus w2:p1"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	err := FocusAgentOrItsZenPane(cli, mode, 2)
+	require.NoError(t, err)
+	herdrCalls := calls()
+	wantCalls := []string{"agent list", "agent focus w2:p1"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func focusAgentShowsZenPaneOfNumberedAgentWithoutFocusingAgent(t *testing.T) {
@@ -126,80 +129,68 @@ func focusAgentShowsZenPaneOfNumberedAgentWithoutFocusingAgent(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", false), herdrtest.ZenPane("w1:p2", "w1:p1", true),
 		herdrtest.ClaudePane("w1:p3", false), agentZenPane})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := FocusAgentOrItsZenPane(cli, mode, 2); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"agent list", "pane list", "tab focus w1:t2", "plugin pane focus w1:p4", "pane zoom w1:p4 --on"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	focusErr := FocusAgentOrItsZenPane(cli, mode, 2)
+	require.NoError(t, focusErr)
+	herdrCalls := calls()
+	wantCalls := []string{"agent list", "pane list", "tab focus w1:t2", "plugin pane focus w1:p4", "pane zoom w1:p4 --on"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func focusAgentFocusesNumberedAgentWithoutZenPaneForFocusHookToOpenOne(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", false), herdrtest.ZenPane("w1:p2", "w1:p1", true),
 		herdrtest.ClaudePane("w2:p1", false)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := FocusAgentOrItsZenPane(cli, mode, 2); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"agent list", "pane list", "agent focus w2:p1"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	focusErr := FocusAgentOrItsZenPane(cli, mode, 2)
+	require.NoError(t, focusErr)
+	herdrCalls := calls()
+	wantCalls := []string{"agent list", "pane list", "agent focus w2:p1"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func focusAgentFailsForNumberPastLastAgent(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
-	if err := FocusAgentOrItsZenPane(cli, mode, 2); err == nil {
-		t.Fatal("FocusAgentOrItsZenPane(2) with one agent returned no error")
-	}
-	want := []string{"agent list"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	err := FocusAgentOrItsZenPane(cli, mode, 2)
+	require.Error(t, err)
+	herdrCalls := calls()
+	wantCalls := []string{"agent list"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func focusHooksRunTogetherOpenOneZenPaneForClaudePane(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
 	var hooks sync.WaitGroup
-	errs := make(chan error, 4)
+	hookErrs := make(chan error, 4)
 	for range 4 {
-		hooks.Go(func() { errs <- ShowFocusedZenView(cli, mode) })
+		hooks.Go(func() { hookErrs <- ShowFocusedZenView(cli, mode) })
 	}
 	hooks.Wait()
-	close(errs)
-	for err := range errs {
-		if err != nil {
-			t.Fatal(err)
-		}
+	close(hookErrs)
+	for hookErr := range hookErrs {
+		require.NoError(t, hookErr)
 	}
-	opens := 0
-	for _, call := range calls() {
-		if strings.HasPrefix(call, "plugin pane open") {
-			opens++
-		}
-	}
-	if opens != 1 {
-		t.Errorf("zen panes opened = %d, want 1: %q", opens, calls())
-	}
+	herdrCalls := calls()
+	openCalls := herdrCallsStartingWith(herdrCalls, "plugin pane open")
+	require.Len(t, openCalls, 1)
 }
 
 func TestToggle(t *testing.T) {
 	t.Run("altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView",
 		altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView)
 	t.Run("altXMovesWrappedDraftOutOfClaudesInputAsOneLine", altXMovesWrappedDraftOutOfClaudesInputAsOneLine)
-	t.Run("altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude", altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude)
+	t.Run("altXSendsNoKeyAndMovesNothingFromPlaceholder", altXSendsNoKeyAndMovesNothingFromPlaceholder)
+	t.Run("altXSendsNoKeyAndMovesNothingFromEmptyBox", altXSendsNoKeyAndMovesNothingFromEmptyBox)
+	t.Run("altXSendsNoKeyAndMovesNothingFromBlockedClaude", altXSendsNoKeyAndMovesNothingFromBlockedClaude)
 	t.Run("altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys",
 		altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys)
 	t.Run("altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel", altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel)
@@ -216,41 +207,34 @@ func altXRefusedShowsErrorInSilentNotificationTitledZenMode(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-pasted-label.ansi", "")
-	if err := ToggleAndNotifyFailure(cli, herdr.API{}, mode); !errors.Is(err, ui.ErrClaudeInputHoldsPaste) {
-		t.Errorf("ToggleAndNotifyFailure = %v, want %v", err, ui.ErrClaudeInputHoldsPaste)
-	}
-	want := []string{
+	err := ToggleAndNotifyFailure(cli, herdr.API{}, mode)
+	require.ErrorIs(t, err, ui.ErrClaudeInputHoldsPaste)
+	herdrCalls := calls()
+	wantCalls := []string{
 		"pane list",
 		"pane read w1:p1 --source visible --format ansi",
 		"notification show Zen mode --body " + ui.ErrClaudeInputHoldsPaste.Error() + " --sound none",
 	}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func altXSucceedingShowsNoNotification(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-empty.ansi", "")
-	if err := ToggleAndNotifyFailure(cli, herdr.API{}, mode); err != nil {
-		t.Fatal(err)
-	}
-	for _, call := range calls() {
-		if strings.HasPrefix(call, "notification") {
-			t.Errorf("herdr calls = %q, want no notification", calls())
-		}
-	}
+	err := ToggleAndNotifyFailure(cli, herdr.API{}, mode)
+	require.NoError(t, err)
+	herdrCalls := calls()
+	notificationCalls := herdrCallsStartingWith(herdrCalls, "notification")
+	require.Empty(t, notificationCalls)
 }
 
 func altXFailingNotificationKeepsToggleErrorAndAddsItsOwn(t *testing.T) {
 	cli := herdr.CLI{Binary: filepath.Join(t.TempDir(), "missing-herdr.exe"), PluginID: "zen-test"}
-	err := ToggleAndNotifyFailure(cli, herdr.API{}, testMode(t))
-	for _, wantText := range []string{"herdr pane list failed", "herdr notification show failed"} {
-		if err == nil || !strings.Contains(err.Error(), wantText) {
-			t.Errorf("ToggleAndNotifyFailure = %v, want an error holding %q", err, wantText)
-		}
-	}
+	mode := testMode(t)
+	err := ToggleAndNotifyFailure(cli, herdr.API{}, mode)
+	require.ErrorContains(t, err, "herdr pane list failed")
+	require.ErrorContains(t, err, "herdr notification show failed")
 }
 
 func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAndMarksZenView(t *testing.T) {
@@ -258,16 +242,16 @@ func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAnd
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "claude-input-empty.ansi")
 	pastes := []string{"a\nb\nc\nd"}
-	if err := WriteDraft(mode.DraftFile("w1:p1"), ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]", Pastes: pastes}); err != nil {
-		t.Fatal(err)
-	}
-	if err := Toggle(cli, herdr.API{}, mode); err != nil {
-		t.Fatal(err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || !isOn {
-		t.Errorf("IsOn = %v, %v, want true", isOn, err)
-	}
-	want := []string{
+	draftFile := mode.DraftFile("w1:p1")
+	writeErr := WriteDraft(draftFile, ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]", Pastes: pastes})
+	require.NoError(t, writeErr)
+	toggleErr := Toggle(cli, herdr.API{}, mode)
+	require.NoError(t, toggleErr)
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.True(t, isOn)
+	herdrCalls := calls()
+	wantCalls := []string{
 		"pane list",
 		"pane read w1:p1 --source visible --format ansi",
 		"pane send-keys w1:p1 ctrl+u ctrl+u",
@@ -276,116 +260,95 @@ func altXTurnsZenModeOnMovesClaudesDraftAfterZenDraftKeepingItsPastesAndOpensAnd
 			"ZEN_CLAUDE_PANE=w1:p1 --focus",
 		"pane report-metadata w1:z1 --source zen-test --token claude_pane=w1:p1",
 	}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
-	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]\nmove this draft", Pastes: pastes})
+	require.Equal(t, wantCalls, herdrCalls)
+	assertDraft(t, draftFile, ui.Draft{Text: "left by a closed zen pane [Pasted text #1 +3 lines]\nmove this draft", Pastes: pastes})
 }
 
 func assertDraft(t *testing.T, draftFile string, want ui.Draft) {
 	draft, err := SavedDraft(draftFile)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if draft.Text != want.Text || !slices.Equal(draft.Pastes, want.Pastes) {
-		t.Errorf("draft = %+q, want %+q", draft, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, draft)
 }
 
 func altXMovesWrappedDraftOutOfClaudesInputAsOneLine(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-wrapped.ansi", "claude-input-empty.ansi")
-	if err := Toggle(cli, herdr.API{}, mode); err != nil {
-		t.Fatal(err)
-	}
-	if got := calls(); !slices.Contains(got, "pane send-keys w1:p1 ctrl+u ctrl+u ctrl+u ctrl+u") {
-		t.Errorf("herdr calls = %q, want ctrl+u twice per row of the box", got)
-	}
-	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "this unsent draft is long enough to wrap across two rows of " +
+	err := Toggle(cli, herdr.API{}, mode)
+	require.NoError(t, err)
+	herdrCalls := calls()
+	require.Contains(t, herdrCalls, "pane send-keys w1:p1 ctrl+u ctrl+u ctrl+u ctrl+u")
+	draftFile := mode.DraftFile("w1:p1")
+	assertDraft(t, draftFile, ui.Draft{Text: "this unsent draft is long enough to wrap across two rows of " +
 		"the Claude input box, so pane read drops the space at the wrap"})
 }
 
-func altXSendsNoKeyAndMovesNothingFromPlaceholderEmptyBoxOrBlockedClaude(t *testing.T) {
+func assertToggleSendsNoKeyAndWritesNoDraft(t *testing.T, claudePane herdr.Pane, capture string) {
+	cli, calls := herdrtest.Fake(t, []herdr.Pane{claudePane})
+	mode := testMode(t)
+	herdrtest.ShowOnScreen(t, "w1:p1", capture, "")
+	err := Toggle(cli, herdr.API{}, mode)
+	require.NoError(t, err)
+	herdrCalls := calls()
+	sendKeyCalls := herdrCallsStartingWith(herdrCalls, "pane send-keys")
+	require.Empty(t, sendKeyCalls)
+	assertNoDraftFile(t, mode, "w1:p1")
+}
+
+func altXSendsNoKeyAndMovesNothingFromPlaceholder(t *testing.T) {
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	assertToggleSendsNoKeyAndWritesNoDraft(t, claudePane, "claude-input-placeholder.ansi")
+}
+
+func altXSendsNoKeyAndMovesNothingFromEmptyBox(t *testing.T) {
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	assertToggleSendsNoKeyAndWritesNoDraft(t, claudePane, "claude-input-empty.ansi")
+}
+
+func altXSendsNoKeyAndMovesNothingFromBlockedClaude(t *testing.T) {
 	blockedPane := herdrtest.ClaudePane("w1:p1", true)
 	blockedPane.AgentStatus = "blocked"
-	cases := []struct {
-		name    string
-		pane    herdr.Pane
-		capture string
-	}{
-		{name: "placeholder", pane: herdrtest.ClaudePane("w1:p1", true), capture: "claude-input-placeholder.ansi"},
-		{name: "empty box", pane: herdrtest.ClaudePane("w1:p1", true), capture: "claude-input-empty.ansi"},
-		{name: "blocked", pane: blockedPane, capture: "claude-input-one-row.ansi"},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			cli, calls := herdrtest.Fake(t, []herdr.Pane{testCase.pane})
-			mode := testMode(t)
-			herdrtest.ShowOnScreen(t, "w1:p1", testCase.capture, "")
-			if err := Toggle(cli, herdr.API{}, mode); err != nil {
-				t.Fatal(err)
-			}
-			for _, call := range calls() {
-				if strings.HasPrefix(call, "pane send-keys") {
-					t.Errorf("herdr calls = %q, want no send-keys", calls())
-				}
-			}
-			if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
-				t.Errorf("draft file: %v, want none", err)
-			}
-		})
-	}
+	assertToggleSendsNoKeyAndWritesNoDraft(t, blockedPane, "claude-input-one-row.ansi")
 }
 
 func altXFailsNamingPaneAndMovesNothingWhenClaudesInputStillHoldsTextAfterClearKeys(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
-	err := Toggle(cli, herdr.API{}, mode)
-	if err == nil || !strings.Contains(err.Error(), "pane w1:p1 still holds text") {
-		t.Errorf("Toggle = %v, want an error naming pane w1:p1", err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || isOn {
-		t.Errorf("IsOn = %v, %v, want false", isOn, err)
-	}
-	if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
-		t.Errorf("draft file: %v, want none", err)
-	}
-	for _, call := range calls() {
-		if strings.HasPrefix(call, "plugin pane open") {
-			t.Errorf("herdr calls = %q, want no zen pane opened", calls())
-		}
-	}
+	toggleErr := Toggle(cli, herdr.API{}, mode)
+	require.ErrorContains(t, toggleErr, "pane w1:p1 still holds text")
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.False(t, isOn)
+	assertNoDraftFile(t, mode, "w1:p1")
+	herdrCalls := calls()
+	openCalls := herdrCallsStartingWith(herdrCalls, "plugin pane open")
+	require.Empty(t, openCalls)
 }
 
 func altXRefusesAndSendsNoKeyWhenClaudesInputHoldsPasteLabel(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-pasted-label.ansi", "claude-input-empty.ansi")
-	if err := Toggle(cli, herdr.API{}, mode); !errors.Is(err, ui.ErrClaudeInputHoldsPaste) {
-		t.Errorf("Toggle = %v, want %v", err, ui.ErrClaudeInputHoldsPaste)
-	}
-	if isOn, err := mode.IsOn(); err != nil || isOn {
-		t.Errorf("IsOn = %v, %v, want false", isOn, err)
-	}
-	if _, err := os.Stat(mode.DraftFile("w1:p1")); !os.IsNotExist(err) {
-		t.Errorf("draft file: %v, want none", err)
-	}
-	want := []string{"pane list", "pane read w1:p1 --source visible --format ansi"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	toggleErr := Toggle(cli, herdr.API{}, mode)
+	require.ErrorIs(t, toggleErr, ui.ErrClaudeInputHoldsPaste)
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.False(t, isOn)
+	assertNoDraftFile(t, mode, "w1:p1")
+	herdrCalls := calls()
+	wantCalls := []string{"pane list", "pane read w1:p1 --source visible --format ansi"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func altXMovesTypedPastedTextWithoutLabelNumber(t *testing.T) {
 	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-typed-label-start.ansi", "claude-input-empty.ansi")
-	if err := Toggle(cli, herdr.API{}, mode); err != nil {
-		t.Fatal(err)
-	}
-	assertDraft(t, mode.DraftFile("w1:p1"), ui.Draft{Text: "[Pasted text"})
+	err := Toggle(cli, herdr.API{}, mode)
+	require.NoError(t, err)
+	draftFile := mode.DraftFile("w1:p1")
+	assertDraft(t, draftFile, ui.Draft{Text: "[Pasted text"})
 }
 
 func altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane(t *testing.T) {
@@ -399,56 +362,48 @@ func altXTurnsZenModeOffClosesEveryZenPaneMovesItsDraftAndFocusesClaudePane(t *t
 	cli, calls := herdrtest.Fake(t, panes)
 	api, requests := herdrtest.FakeAPI(t, panes)
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := WriteDraft(mode.DraftFile("w1:p1"), ui.Draft{Text: "first line\nsecond line"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(mode.DraftFile("w1:p3"), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := Toggle(cli, api, mode); err != nil {
-		t.Fatal(err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || isOn {
-		t.Errorf("IsOn = %v, %v, want false", isOn, err)
-	}
-	want := []string{
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	claudeDraftFile := mode.DraftFile("w1:p1")
+	draftErr := WriteDraft(claudeDraftFile, ui.Draft{Text: "first line\nsecond line"})
+	require.NoError(t, draftErr)
+	emptyDraftFile := mode.DraftFile("w1:p3")
+	emptyDraftErr := os.WriteFile(emptyDraftFile, []byte{}, 0o644)
+	require.NoError(t, emptyDraftErr)
+	toggleErr := Toggle(cli, api, mode)
+	require.NoError(t, toggleErr)
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.False(t, isOn)
+	herdrCalls := calls()
+	wantCalls := []string{
 		"pane list",
 		"pane close w1:p2",
 		"pane close w1:p4",
 		"pane close w1:p5",
 		"agent focus w1:p1",
 	}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	require.Equal(t, wantCalls, herdrCalls)
+	apiRequests := requests()
 	wantRequests := []string{"pane.send_text w1:p1 first line\nsecond line"}
-	if got := requests(); !reflect.DeepEqual(got, wantRequests) {
-		t.Errorf("herdr API requests = %q, want %q", got, wantRequests)
-	}
-	for _, claudePaneID := range []string{"w1:p1", "w1:p3"} {
-		if _, err := os.Stat(mode.DraftFile(claudePaneID)); !os.IsNotExist(err) {
-			t.Errorf("draft file of %s after the move: %v, want it removed", claudePaneID, err)
-		}
-	}
+	require.Equal(t, wantRequests, apiRequests)
+	assertNoDraftFile(t, mode, "w1:p1")
+	assertNoDraftFile(t, mode, "w1:p3")
 }
 
 func altXTurningZenModeOffLeavesFocusOnPaneThatIsNotZenPane(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p2", "w1:p3", false),
 		herdrtest.ClaudePane("w1:p3", false)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := Toggle(cli, herdr.API{}, mode); err != nil {
-		t.Fatal(err)
-	}
-	want := []string{"pane list", "pane close w1:p2"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	toggleErr := Toggle(cli, herdr.API{}, mode)
+	require.NoError(t, toggleErr)
+	herdrCalls := calls()
+	wantCalls := []string{"pane list", "pane close w1:p2"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func TestTurnOn(t *testing.T) {
@@ -462,54 +417,48 @@ func turnOnWhileOffTurnsZenModeOnAndOpensZenViewOfFocusedClaudePane(t *testing.T
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-empty.ansi", "")
-	if err := TurnOnAndShowFocusedZenView(cli, mode); err != nil {
-		t.Fatal(err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || !isOn {
-		t.Errorf("IsOn = %v, %v, want true", isOn, err)
-	}
-	want := []string{
+	turnOnErr := TurnOnAndShowFocusedZenView(cli, mode)
+	require.NoError(t, turnOnErr)
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.True(t, isOn)
+	herdrCalls := calls()
+	wantCalls := []string{
 		"pane list",
 		"pane read w1:p1 --source visible --format ansi",
 		"plugin pane open --plugin zen-test --entrypoint zen --placement zoomed --target-pane w1:p1 --env " +
 			"ZEN_CLAUDE_PANE=w1:p1 --focus",
 		"pane report-metadata w1:z1 --source zen-test --token claude_pane=w1:p1",
 	}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func turnOnWhileOnKeepsZenModeOnAndShowsExistingZenPane(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true), herdrtest.ZenPane("w1:p3", "w1:p1", false)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	if err := TurnOnAndShowFocusedZenView(cli, mode); err != nil {
-		t.Fatal(err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || !isOn {
-		t.Errorf("IsOn = %v, %v, want true", isOn, err)
-	}
-	want := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
+	turnOnErr := TurnOnAndShowFocusedZenView(cli, mode)
+	require.NoError(t, turnOnErr)
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.True(t, isOn)
+	herdrCalls := calls()
+	wantCalls := []string{"pane list", "plugin pane focus w1:p3", "pane zoom w1:p3 --on"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func turnOnWhileOnKeepsZenModeOnWhenZenPaneFailsToOpen(t *testing.T) {
 	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	mode := testMode(t)
-	if err := os.WriteFile(mode.ModeFile(), []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	modeFile := mode.ModeFile()
+	modeErr := os.WriteFile(modeFile, []byte{}, 0o644)
+	require.NoError(t, modeErr)
 	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-one-row.ansi", "")
-	err := TurnOnAndShowFocusedZenView(cli, mode)
-	if err == nil || !strings.Contains(err.Error(), "pane w1:p1 still holds text") {
-		t.Errorf("TurnOnAndShowFocusedZenView = %v, want an error naming pane w1:p1", err)
-	}
-	if isOn, err := mode.IsOn(); err != nil || !isOn {
-		t.Errorf("IsOn = %v, %v, want true", isOn, err)
-	}
+	turnOnErr := TurnOnAndShowFocusedZenView(cli, mode)
+	require.ErrorContains(t, turnOnErr, "pane w1:p1 still holds text")
+	isOn, isOnErr := mode.IsOn()
+	require.NoError(t, isOnErr)
+	require.True(t, isOn)
 }

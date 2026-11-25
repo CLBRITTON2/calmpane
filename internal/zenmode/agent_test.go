@@ -2,10 +2,8 @@ package zenmode
 
 import (
 	"encoding/json"
-	"errors"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
@@ -13,10 +11,16 @@ import (
 	"github.com/CLBRITTON2/calmpane/internal/herdr"
 	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
 	"github.com/CLBRITTON2/calmpane/internal/ui"
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestHerdrAgent(t *testing.T) {
-	t.Run("statusMapsHerdrAgentStatusAndUnknownForAnyOther", statusMapsHerdrAgentStatusAndUnknownForAnyOther)
+	t.Run("statusIsWorkingWhileHerdrReportsWorking", statusIsWorkingWhileHerdrReportsWorking)
+	t.Run("statusIsIdleWhileHerdrReportsIdle", statusIsIdleWhileHerdrReportsIdle)
+	t.Run("statusIsDoneWhileHerdrReportsDone", statusIsDoneWhileHerdrReportsDone)
+	t.Run("statusIsBlockedWhileHerdrReportsBlocked", statusIsBlockedWhileHerdrReportsBlocked)
+	t.Run("statusIsUnknownWhileHerdrReportsUnknown", statusIsUnknownWhileHerdrReportsUnknown)
 	t.Run("sendPromptToBlockedClaudeReturnsAgentBlocked", sendPromptToBlockedClaudeReturnsAgentBlocked)
 	t.Run("sendPromptSendNowAndInterruptReachClaudePane", sendPromptSendNowAndInterruptReachClaudePane)
 	t.Run("sendPromptSendsPromptLongerThanWindowsCommandLineWhole", sendPromptSendsPromptLongerThanWindowsCommandLineWhole)
@@ -24,75 +28,91 @@ func TestHerdrAgent(t *testing.T) {
 	t.Run("sendPromptWithoutSocketPathFailsNamingHerdrSocketPath", sendPromptWithoutSocketPathFailsNamingHerdrSocketPath)
 	t.Run("waitForSessionIDWaitsUntilHerdrReportsClaudeSession", waitForSessionIDWaitsUntilHerdrReportsClaudeSession)
 	t.Run("waitForSessionIDFailsForPaneWithoutClaudeSession", waitForSessionIDFailsForPaneWithoutClaudeSession)
+	t.Run("waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession",
+		waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession)
+	t.Run("statusIsGoneOncePaneRunsNoAgent", statusIsGoneOncePaneRunsNoAgent)
 	t.Run("waitForSessionIDFailsWithoutClaudePaneID", waitForSessionIDFailsWithoutClaudePaneID)
-	t.Run("inputBoxShownOnlyWhileClaudePaneShowsInputBox", inputBoxShownOnlyWhileClaudePaneShowsInputBox)
+	t.Run("inputBoxShownWhileClaudePaneShowsEmptyInputBox", inputBoxShownWhileClaudePaneShowsEmptyInputBox)
+	t.Run("inputBoxNotShownWhileClaudePaneShowsBoxScrolledPastItsTop", inputBoxNotShownWhileClaudePaneShowsBoxScrolledPastItsTop)
 	t.Run("workingDirectoryIsClaudePaneCwd", workingDirectoryIsClaudePaneCwd)
 	t.Run("workingDirectoryFailsForPaneWithoutCwd", workingDirectoryFailsForPaneWithoutCwd)
 }
 
-func inputBoxShownOnlyWhileClaudePaneShowsInputBox(t *testing.T) {
+func paneReportingAgentSession(pane herdr.Pane, agent string, sessionID string) herdr.Pane {
+	sessionPane := pane
+	sessionPane.AgentSession = &struct {
+		Agent string `json:"agent"`
+		Value string `json:"value"`
+	}{Agent: agent, Value: sessionID}
+	return sessionPane
+}
+
+func inputBoxShownWhileClaudePaneShowsEmptyInputBox(t *testing.T) {
 	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
-	for capture, want := range map[string]bool{"claude-input-empty.ansi": true, "claude-input-scrolled.ansi": false} {
-		herdrtest.ShowOnScreen(t, "w1:p1", capture, "")
-		got, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.InputBoxShown()
-		if err != nil {
-			t.Fatal(err)
-		}
-		if got != want {
-			t.Errorf("InputBoxShown with %s on screen = %t, want %t", capture, got, want)
-		}
-	}
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-empty.ansi", "")
+	shown, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.InputBoxShown()
+	require.NoError(t, err)
+	require.True(t, shown)
+}
+
+func inputBoxNotShownWhileClaudePaneShowsBoxScrolledPastItsTop(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-input-scrolled.ansi", "")
+	shown, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.InputBoxShown()
+	require.NoError(t, err)
+	require.False(t, shown)
 }
 
 func workingDirectoryIsClaudePaneCwd(t *testing.T) {
 	claudePane := herdrtest.ClaudePane("w1:p1", true)
 	claudePane.Cwd = `C:\work\project\`
 	cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
-	got, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WorkingDirectory()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != claudePane.Cwd {
-		t.Errorf("WorkingDirectory = %q, want %q", got, claudePane.Cwd)
-	}
+	workingDirectory, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WorkingDirectory()
+	require.NoError(t, err)
+	require.Equal(t, claudePane.Cwd, workingDirectory)
 }
 
 func workingDirectoryFailsForPaneWithoutCwd(t *testing.T) {
 	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WorkingDirectory()
-	want := "herdr reports no working directory for pane w1:p1"
-	if err == nil || err.Error() != want {
-		t.Errorf("WorkingDirectory error = %v, want %q", err, want)
-	}
+	require.EqualError(t, err, "herdr reports no working directory for pane w1:p1")
 }
 
-func statusMapsHerdrAgentStatusAndUnknownForAnyOther(t *testing.T) {
-	for herdrStatus, want := range map[string]ui.AgentStatus{
-		"working": ui.AgentWorking, "idle": ui.AgentIdle, "done": ui.AgentDone, "blocked": ui.AgentBlocked,
-		"unknown": ui.AgentUnknown,
-	} {
-		t.Run(herdrStatus, func(t *testing.T) {
-			claudePane := herdrtest.ClaudePane("w1:p1", true)
-			claudePane.AgentStatus = herdrStatus
-			cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
-			got, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.Status()
-			if err != nil {
-				t.Fatal(err)
-			}
-			if got != want {
-				t.Errorf("Status = %d, want %d", got, want)
-			}
-		})
-	}
+func assertHerdrStatusMapsToAgentStatus(t *testing.T, herdrStatus string, wantStatus ui.AgentStatus) {
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	claudePane.AgentStatus = herdrStatus
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
+	agentStatus, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.Status()
+	require.NoError(t, err)
+	require.Equal(t, wantStatus, agentStatus)
+}
+
+func statusIsWorkingWhileHerdrReportsWorking(t *testing.T) {
+	assertHerdrStatusMapsToAgentStatus(t, "working", ui.AgentWorking)
+}
+
+func statusIsIdleWhileHerdrReportsIdle(t *testing.T) {
+	assertHerdrStatusMapsToAgentStatus(t, "idle", ui.AgentIdle)
+}
+
+func statusIsDoneWhileHerdrReportsDone(t *testing.T) {
+	assertHerdrStatusMapsToAgentStatus(t, "done", ui.AgentDone)
+}
+
+func statusIsBlockedWhileHerdrReportsBlocked(t *testing.T) {
+	assertHerdrStatusMapsToAgentStatus(t, "blocked", ui.AgentBlocked)
+}
+
+func statusIsUnknownWhileHerdrReportsUnknown(t *testing.T) {
+	assertHerdrStatusMapsToAgentStatus(t, "unknown", ui.AgentUnknown)
 }
 
 func sendPromptToBlockedClaudeReturnsAgentBlocked(t *testing.T) {
 	claudePane := herdrtest.ClaudePane("w1:p1", true)
 	claudePane.AgentStatus = "blocked"
 	api, _ := herdrtest.FakeAPI(t, []herdr.Pane{claudePane})
-	if err := (HerdrAgent{API: api, ClaudePaneID: "w1:p1"}).SendPrompt("go"); !errors.Is(err, ui.ErrAgentBlocked) {
-		t.Errorf("SendPrompt error = %v, want ui.ErrAgentBlocked", err)
-	}
+	err := HerdrAgent{API: api, ClaudePaneID: "w1:p1"}.SendPrompt("go")
+	require.ErrorIs(t, err, ui.ErrAgentBlocked)
 }
 
 func sendPromptSendNowAndInterruptReachClaudePane(t *testing.T) {
@@ -100,50 +120,39 @@ func sendPromptSendNowAndInterruptReachClaudePane(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, panes)
 	api, requests := herdrtest.FakeAPI(t, panes)
 	agent := HerdrAgent{CLI: cli, API: api, ClaudePaneID: "w1:p1"}
-	if err := agent.SendPrompt("ship it"); err != nil {
-		t.Fatal(err)
-	}
-	if err := agent.SendNow(); err != nil {
-		t.Fatal(err)
-	}
-	if err := agent.Interrupt(); err != nil {
-		t.Fatal(err)
-	}
-	if got, want := requests(), []string{"agent.prompt w1:p1 ship it"}; !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr API requests = %q, want %q", got, want)
-	}
-	want := []string{"pane send-keys w1:p1 ctrl+x ctrl+s", "pane send-keys w1:p1 esc"}
-	if got := calls(); !reflect.DeepEqual(got, want) {
-		t.Errorf("herdr calls = %q, want %q", got, want)
-	}
+	promptErr := agent.SendPrompt("ship it")
+	require.NoError(t, promptErr)
+	sendNowErr := agent.SendNow()
+	require.NoError(t, sendNowErr)
+	interruptErr := agent.Interrupt()
+	require.NoError(t, interruptErr)
+	apiRequests := requests()
+	wantRequests := []string{"agent.prompt w1:p1 ship it"}
+	require.Equal(t, wantRequests, apiRequests)
+	herdrCalls := calls()
+	wantCalls := []string{"pane send-keys w1:p1 ctrl+x ctrl+s", "pane send-keys w1:p1 esc"}
+	require.Equal(t, wantCalls, herdrCalls)
 }
 
 func sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt(t *testing.T) {
 	api, _ := herdrtest.FakeAPI(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	err := HerdrAgent{API: api, ClaudePaneID: "w1:p9"}.SendPrompt("secret prompt text")
-	want := "herdr agent.prompt failed: pane_not_found: pane w1:p9 not found"
-	if err == nil || err.Error() != want {
-		t.Errorf("SendPrompt error = %v, want %q", err, want)
-	}
+	require.EqualError(t, err, "herdr agent.prompt failed: pane_not_found: pane w1:p9 not found")
 }
 
 func sendPromptWithoutSocketPathFailsNamingHerdrSocketPath(t *testing.T) {
 	err := HerdrAgent{API: herdr.API{}, ClaudePaneID: "w1:p1"}.SendPrompt("go")
-	want := "herdr agent.prompt failed: HERDR_SOCKET_PATH is not set"
-	if err == nil || err.Error() != want {
-		t.Errorf("SendPrompt error = %v, want %q", err, want)
-	}
+	require.EqualError(t, err, "herdr agent.prompt failed: HERDR_SOCKET_PATH is not set")
 }
 
 func sendPromptSendsPromptLongerThanWindowsCommandLineWhole(t *testing.T) {
 	api, requests := herdrtest.FakeAPI(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	prompt := strings.Repeat("a line of the pasted log\n", 1600)
-	if err := (HerdrAgent{API: api, ClaudePaneID: "w1:p1"}).SendPrompt(prompt); err != nil {
-		t.Fatal(err)
-	}
-	if got := requests(); len(got) != 1 || got[0] != "agent.prompt w1:p1 "+prompt {
-		t.Errorf("herdr API requests = %.80q, want one agent.prompt of the %d character prompt", got, len(prompt))
-	}
+	err := HerdrAgent{API: api, ClaudePaneID: "w1:p1"}.SendPrompt(prompt)
+	require.NoError(t, err)
+	apiRequests := requests()
+	wantRequests := []string{"agent.prompt w1:p1 " + prompt}
+	require.Equal(t, wantRequests, apiRequests)
 }
 
 func waitForSessionIDWaitsUntilHerdrReportsClaudeSession(t *testing.T) {
@@ -151,55 +160,56 @@ func waitForSessionIDWaitsUntilHerdrReportsClaudeSession(t *testing.T) {
 	reported := make(chan string, 1)
 	go func() {
 		sessionID, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
-		if err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, err)
 		reported <- sessionID
 	}()
 	time.Sleep(time.Second)
-	select {
-	case sessionID := <-reported:
-		t.Fatalf("returned session %q before herdr reported one", sessionID)
-	default:
-	}
+	require.Empty(t, reported)
 	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
-	startedPane := herdrtest.ClaudePane("w1:p1", true)
-	startedPane.AgentSession = &struct {
-		Agent string `json:"agent"`
-		Value string `json:"value"`
-	}{Agent: "claude", Value: sessionID}
-	panesJSON, err := json.Marshal([]herdr.Pane{startedPane})
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(os.Getenv(herdrtest.FakeDirEnv), "panes.json"), panesJSON, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	startedPane := paneReportingAgentSession(claudePane, "claude", sessionID)
+	panesJSON, marshalErr := json.Marshal([]herdr.Pane{startedPane})
+	require.NoError(t, marshalErr)
+	panesFile := filepath.Join(os.Getenv(herdrtest.FakeDirEnv), "panes.json")
+	writeErr := os.WriteFile(panesFile, panesJSON, 0o644)
+	require.NoError(t, writeErr)
 	select {
-	case got := <-reported:
-		if got != sessionID {
-			t.Errorf("WaitForSessionID = %q, want %q", got, sessionID)
-		}
+	case reportedSessionID := <-reported:
+		require.Equal(t, sessionID, reportedSessionID)
 	case <-time.After(5 * time.Second):
-		t.Fatal("still waiting 5 s after herdr reported the session")
+		require.FailNow(t, "still waiting 5 s after herdr reported the session")
 	}
 }
 
 func waitForSessionIDFailsForPaneWithoutClaudeSession(t *testing.T) {
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{{PaneID: "w1:p1", Focused: true}})
+	claudePane := herdrtest.ClaudePane("w1:p1", true)
+	codexSessionPane := paneReportingAgentSession(claudePane, "codex", "24e27105-227a-4078-90e7-50d3dea316bf")
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{codexSessionPane})
 	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
-	if err == nil || err.Error() != "No Claude session in this pane." {
-		t.Errorf("WaitForSessionID error = %v, want No Claude session in this pane.", err)
-	}
+	require.NotErrorIs(t, err, ui.ErrAgentGone)
+	require.EqualError(t, err, "No Claude session in this pane.")
+}
+
+func waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession(t *testing.T) {
+	agentlessPane := herdr.Pane{PaneID: "w1:p1", Focused: true, AgentStatus: "idle"}
+	exitedPane := paneReportingAgentSession(agentlessPane, "claude", "24e27105-227a-4078-90e7-50d3dea316bf")
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{exitedPane})
+	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
+	require.ErrorIs(t, err, ui.ErrAgentGone)
+}
+
+func statusIsGoneOncePaneRunsNoAgent(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{{PaneID: "w1:p1", Focused: true, AgentStatus: "idle"}})
+	agentStatus, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.Status()
+	require.NoError(t, err)
+	require.Equal(t, ui.AgentGone, agentStatus)
 }
 
 func waitForSessionIDFailsWithoutClaudePaneID(t *testing.T) {
 	cli, calls := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
 	_, err := HerdrAgent{CLI: cli, ClaudePaneID: ""}.WaitForSessionID()
-	if err == nil || !strings.Contains(err.Error(), herdr.ClaudePaneEnv+" is not set") {
-		t.Errorf("WaitForSessionID error = %v, want one naming %s", err, herdr.ClaudePaneEnv)
-	}
-	if got := calls(); len(got) != 0 {
-		t.Errorf("herdr calls = %q, want none", got)
-	}
+	wantText := herdr.ClaudePaneEnv + " is not set"
+	require.ErrorContains(t, err, wantText)
+	herdrCalls := calls()
+	require.Empty(t, herdrCalls)
 }

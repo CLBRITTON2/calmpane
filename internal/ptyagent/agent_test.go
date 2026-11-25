@@ -13,6 +13,7 @@ import (
 	"golang.org/x/sys/windows"
 
 	"github.com/CLBRITTON2/calmpane/internal/ui"
+	"github.com/stretchr/testify/require"
 )
 
 func TestMain(m *testing.M) {
@@ -131,13 +132,10 @@ func startFakeClaude(t *testing.T) (agent *Agent, inputLog string, stateFile str
 	stateFile = filepath.Join(testDir, "state")
 	t.Setenv(fakeClaudeInputLogEnv, inputLog)
 	agent, err := Start([]string{os.Args[0]}, stateFile, 80, 24)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	t.Cleanup(func() {
-		if _, err := agent.Close(); err != nil {
-			t.Error(err)
-		}
+		_, closeErr := agent.Close()
+		require.NoError(t, closeErr)
 	})
 	waitFor(t, "the fake Claude's input box", func() bool {
 		screen, _ := agent.Screen()
@@ -147,13 +145,7 @@ func startFakeClaude(t *testing.T) (agent *Agent, inputLog string, stateFile str
 }
 
 func waitFor(t *testing.T, condition string, holds func() bool) {
-	deadline := time.Now().Add(10 * time.Second)
-	for !holds() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", condition)
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	require.Eventually(t, holds, 10*time.Second, 20*time.Millisecond, "timed out waiting for %s", condition)
 }
 
 // waitForInput waits until the fake Claude has read want, and fails when it read anything else.
@@ -161,231 +153,193 @@ func waitForInput(t *testing.T, inputLog string, want string) {
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		input, err := os.ReadFile(inputLog)
-		if err != nil && !errors.Is(err, os.ErrNotExist) {
-			t.Fatal(err)
-		}
-		if string(input) == want {
+		require.NoError(t, err)
+		read := string(input)
+		if read == want {
 			return
 		}
-		if !strings.HasPrefix(want, string(input)) || time.Now().After(deadline) {
-			t.Fatalf("Claude read %q, want %q", input, want)
-		}
+		readIsStartOfWant := strings.HasPrefix(want, read)
+		require.True(t, readIsStartOfWant, "Claude read %q, want %q", read, want)
+		timedOut := time.Now().After(deadline)
+		require.False(t, timedOut, "Claude read %q, want %q", read, want)
 		time.Sleep(20 * time.Millisecond)
 	}
 }
 
 func sendPromptWritesBracketedPasteThenEnter(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
-	if err := agent.SendPrompt("ship it\nnow"); err != nil {
-		t.Fatal(err)
-	}
+	err := agent.SendPrompt("ship it\nnow")
+	require.NoError(t, err)
 	waitForInput(t, inputLog, "\x1b[200~ship it\nnow\x1b[201~\r")
 }
 
 func sendPromptToBlockedClaudeWritesNothingAndReturnsAgentBlocked(t *testing.T) {
 	agent, inputLog, stateFile := startFakeClaude(t)
-	if err := os.WriteFile(stateFile, []byte("blocked session-1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	if err := agent.SendPrompt("ship it"); !errors.Is(err, ui.ErrAgentBlocked) {
-		t.Errorf("SendPrompt error = %v, want ui.ErrAgentBlocked", err)
-	}
-	if err := agent.Interrupt(); err != nil {
-		t.Fatal(err)
-	}
+	writeErr := os.WriteFile(stateFile, []byte("blocked session-1\n"), 0o600)
+	require.NoError(t, writeErr)
+	sendErr := agent.SendPrompt("ship it")
+	require.ErrorIs(t, sendErr, ui.ErrAgentBlocked)
+	interruptErr := agent.Interrupt()
+	require.NoError(t, interruptErr)
 	waitForInput(t, inputLog, "\x1b")
 }
 
 func sendNowWritesCtrlXCtrlS(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
-	if err := agent.SendNow(); err != nil {
-		t.Fatal(err)
-	}
+	err := agent.SendNow()
+	require.NoError(t, err)
 	waitForInput(t, inputLog, "\x18\x13")
 }
 
 func interruptWritesEsc(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
-	if err := agent.Interrupt(); err != nil {
-		t.Fatal(err)
-	}
+	err := agent.Interrupt()
+	require.NoError(t, err)
 	waitForInput(t, inputLog, "\x1b")
 }
 
 func interruptMakesWorkingClaudeIdleUntilItsNextHook(t *testing.T) {
 	agent, _, stateFile := startFakeClaude(t)
-	if err := os.WriteFile(stateFile, []byte("working session-1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	writeErr := os.WriteFile(stateFile, []byte("working session-1\n"), 0o600)
+	require.NoError(t, writeErr)
 	assertStatus(t, agent, ui.AgentWorking)
-	if err := agent.Interrupt(); err != nil {
-		t.Fatal(err)
-	}
+	interruptErr := agent.Interrupt()
+	require.NoError(t, interruptErr)
 	assertStatus(t, agent, ui.AgentIdle)
-	promptHook := `{"session_id":"session-1","hook_event_name":"UserPromptSubmit"}`
-	if err := WriteHookState(stateFile, strings.NewReader(promptHook)); err != nil {
-		t.Fatal(err)
-	}
+	promptHook := strings.NewReader(`{"session_id":"session-1","hook_event_name":"UserPromptSubmit"}`)
+	hookErr := WriteHookState(stateFile, promptHook)
+	require.NoError(t, hookErr)
 	assertStatus(t, agent, ui.AgentWorking)
 }
 
 func sendKeyAndPasteReachClaudeThroughEmulator(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
-	if err := agent.SendKey(tea.KeyPressMsg{Code: 'q', Text: "q"}); err != nil {
-		t.Fatal(err)
-	}
-	if err := agent.SendPaste("pasted"); err != nil {
-		t.Fatal(err)
-	}
+	keyErr := agent.SendKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+	require.NoError(t, keyErr)
+	pasteErr := agent.SendPaste("pasted")
+	require.NoError(t, pasteErr)
 	waitForInput(t, inputLog, "q\x1b[200~pasted\x1b[201~")
 }
 
 func waitForSessionIDAndSendKeyFailOnceClaudeExits(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if err := agent.write("\x04"); err != nil {
-		t.Fatal(err)
-	}
-	if _, err := agent.WaitForSessionID(); err == nil {
-		t.Error("WaitForSessionID returned no error after Claude exited with no session")
-	}
+	writeErr := agent.write("\x04")
+	require.NoError(t, writeErr)
+	_, waitErr := agent.WaitForSessionID()
+	require.Error(t, waitErr)
 	waitFor(t, "SendKey to fail", func() bool {
-		return agent.SendKey(tea.KeyPressMsg{Code: 'q', Text: "q"}) != nil
+		keyErr := agent.SendKey(tea.KeyPressMsg{Code: 'q', Text: "q"})
+		return keyErr != nil
 	})
 }
 
 func waitForSessionIDErrorHoldsExitCodeAndNonBlankRowsOfLastScreen(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if err := agent.write("\x04"); err != nil {
-		t.Fatal(err)
-	}
-	_, err := agent.WaitForSessionID()
+	writeErr := agent.write("\x04")
+	require.NoError(t, writeErr)
+	_, waitErr := agent.WaitForSessionID()
 	want := "Claude exited before it started a session (exit code 7). Its last screen:\n" +
 		"Claude Code didn't start.\n  Run claude again."
-	if err == nil || err.Error() != want {
-		t.Errorf("WaitForSessionID error = %v, want %q", err, want)
-	}
+	require.EqualError(t, waitErr, want)
 }
 
 func sendPromptWhileTrustDialogShowsWritesNothingAndReturnsAgentBlocked(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
-	if err := agent.SendKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl}); err != nil {
-		t.Fatal(err)
-	}
+	keyErr := agent.SendKey(tea.KeyPressMsg{Code: 't', Mod: tea.ModCtrl})
+	require.NoError(t, keyErr)
 	waitFor(t, "the trust dialog", func() bool {
 		screen, _ := agent.Screen()
 		return strings.Contains(screen, "Yes, I trust this folder")
 	})
-	if err := agent.SendPrompt("ship it"); !errors.Is(err, ui.ErrAgentBlocked) {
-		t.Errorf("SendPrompt error = %v, want ui.ErrAgentBlocked", err)
-	}
-	if err := agent.SendNow(); err != nil {
-		t.Fatal(err)
-	}
+	sendErr := agent.SendPrompt("ship it")
+	require.ErrorIs(t, sendErr, ui.ErrAgentBlocked)
+	sendNowErr := agent.SendNow()
+	require.NoError(t, sendNowErr)
 	waitForInput(t, inputLog, "\x14\x18\x13")
 }
 
 func takeInputWritesCtrlUTwicePerBoxRowAndReturnsDraft(t *testing.T) {
 	agent, inputLog, _ := startFakeClaude(t)
 	draft, err := agent.TakeInput()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if draft != fakeClaudeDraft {
-		t.Errorf("TakeInput = %q, want %q", draft, fakeClaudeDraft)
-	}
+	require.NoError(t, err)
+	require.Equal(t, fakeClaudeDraft, draft)
 	waitForInput(t, inputLog, "\x15\x15")
 }
 
 func inputBoxShownUntilPickerTakesItsPlace(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if shown, err := agent.InputBoxShown(); err != nil || !shown {
-		t.Fatalf("InputBoxShown with the input box drawn = %t, %v, want true", shown, err)
-	}
-	if err := agent.SendKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl}); err != nil {
-		t.Fatal(err)
-	}
+	shown, err := agent.InputBoxShown()
+	require.NoError(t, err)
+	require.True(t, shown)
+	keyErr := agent.SendKey(tea.KeyPressMsg{Code: 'p', Mod: tea.ModCtrl})
+	require.NoError(t, keyErr)
 	waitFor(t, "the input box to give way to the picker", func() bool {
-		shown, err := agent.InputBoxShown()
-		return err == nil && !shown
+		shownNow, shownErr := agent.InputBoxShown()
+		return shownErr == nil && !shownNow
 	})
 }
 
 func statusIsLastWholeHookStateAndUnknownBeforeFirstHook(t *testing.T) {
 	agent, _, stateFile := startFakeClaude(t)
 	assertStatus(t, agent, ui.AgentUnknown)
-	if err := os.WriteFile(stateFile, []byte("working session-1\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	wholeWriteErr := os.WriteFile(stateFile, []byte("working session-1\n"), 0o600)
+	require.NoError(t, wholeWriteErr)
 	assertStatus(t, agent, ui.AgentWorking)
-	if err := os.WriteFile(stateFile, []byte("done sess"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	partialWriteErr := os.WriteFile(stateFile, []byte("done sess"), 0o600)
+	require.NoError(t, partialWriteErr)
 	assertStatus(t, agent, ui.AgentWorking)
 	sessionID, err := agent.WaitForSessionID()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if sessionID != "session-1" {
-		t.Errorf("WaitForSessionID = %q, want session-1", sessionID)
-	}
+	require.NoError(t, err)
+	require.Equal(t, "session-1", sessionID)
 }
 
 func assertStatus(t *testing.T, agent *Agent, want ui.AgentStatus) {
 	t.Helper()
 	got, err := agent.Status()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != want {
-		t.Errorf("Status = %d, want %d", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func resizeSizesClaudesScreen(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if err := agent.Resize(100, 30); err != nil {
-		t.Fatal(err)
-	}
-	if width, height := agent.emulator.Width(), agent.emulator.Height(); width != 100 || height != 30 {
-		t.Errorf("emulator size = %dx%d, want 100x30", width, height)
-	}
-	width, height, err := agent.pseudoConsole.Size()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if width != 100 || height != 30 {
-		t.Errorf("pseudo-console size = %dx%d, want 100x30", width, height)
-	}
+	resizeErr := agent.Resize(100, 30)
+	require.NoError(t, resizeErr)
+	emulatorWidth := agent.emulator.Width()
+	require.Equal(t, 100, emulatorWidth)
+	emulatorHeight := agent.emulator.Height()
+	require.Equal(t, 30, emulatorHeight)
+	consoleWidth, consoleHeight, sizeErr := agent.pseudoConsole.Size()
+	require.NoError(t, sizeErr)
+	require.Equal(t, 100, consoleWidth)
+	require.Equal(t, 30, consoleHeight)
 }
 
 func closeEndsClaudeAndExitedCloses(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if _, err := agent.Close(); err != nil {
-		t.Fatal(err)
-	}
+	_, err := agent.Close()
+	require.NoError(t, err)
+	exitedClosed := false
 	select {
 	case <-agent.Exited():
+		exitedClosed = true
 	default:
-		t.Error("Exited is open after Close returned")
 	}
+	require.True(t, exitedClosed)
 	assertStatus(t, agent, ui.AgentUnknown)
 }
 
 func closeAfterClaudeExitsReturnsClaudesExitCode(t *testing.T) {
 	agent, _, _ := startFakeClaude(t)
-	if err := agent.write("\x04"); err != nil {
-		t.Fatal(err)
-	}
+	writeErr := agent.write("\x04")
+	require.NoError(t, writeErr)
+	exitedWithinTenSeconds := false
 	select {
 	case <-agent.Exited():
+		exitedWithinTenSeconds = true
 	case <-time.After(10 * time.Second):
-		t.Fatal("Exited is open 10s after Claude was told to exit")
 	}
+	require.True(t, exitedWithinTenSeconds)
 	exitCode, err := agent.Close()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if exitCode != fakeClaudeExitCode {
-		t.Errorf("Close exit code = %d, want %d", exitCode, fakeClaudeExitCode)
-	}
+	require.NoError(t, err)
+	require.Equal(t, fakeClaudeExitCode, exitCode)
 }

@@ -60,10 +60,14 @@ func (a HerdrAgent) WorkingDirectory() (string, error) {
 	return claudePane.Cwd, nil
 }
 
+// herdr keeps reporting the agent across /clear and /resume, so only an exit reads as AgentGone.
 func (a HerdrAgent) Status() (ui.AgentStatus, error) {
 	claudePane, err := a.CLI.Pane(a.ClaudePaneID)
 	if err != nil {
 		return ui.AgentUnknown, err
+	}
+	if claudePane.Agent != "claude" {
+		return ui.AgentGone, nil
 	}
 	switch claudePane.AgentStatus {
 	case "working":
@@ -79,7 +83,7 @@ func (a HerdrAgent) Status() (ui.AgentStatus, error) {
 }
 
 // WaitForSessionID waits for a Claude that just started, whose session herdr reports once it is past its startup
-// prompts.
+// prompts. It fails with ui.ErrAgentGone once herdr reports no agent in the pane.
 func (a HerdrAgent) WaitForSessionID() (string, error) {
 	if a.ClaudePaneID == "" {
 		return "", fmt.Errorf("%s is not set: the toggle action opens the zen pane", herdr.ClaudePaneEnv)
@@ -89,11 +93,14 @@ func (a HerdrAgent) WaitForSessionID() (string, error) {
 		if err != nil {
 			return "", err
 		}
-		if claudePane.AgentSession == nil && claudePane.Agent == "claude" {
+		if claudePane.Agent != "claude" {
+			return "", ui.ErrAgentGone
+		}
+		if claudePane.AgentSession == nil {
 			time.Sleep(300 * time.Millisecond)
 			continue
 		}
-		if claudePane.AgentSession == nil || claudePane.AgentSession.Agent != "claude" {
+		if claudePane.AgentSession.Agent != "claude" {
 			return "", errors.New("No Claude session in this pane.")
 		}
 		return claudePane.AgentSession.Value, nil

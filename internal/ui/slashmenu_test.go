@@ -1,18 +1,17 @@
 package ui
 
 import (
-	"errors"
 	"fmt"
 	"io/fs"
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
 	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/calmpane/claudecode"
 )
@@ -25,38 +24,57 @@ var slashTestCommands = []claudecode.SlashCommand{
 }
 
 func TestSlashRanking(t *testing.T) {
-	t.Run("fuzzyScoreRewardsConsecutiveLettersAtWordStartAndNeedsEveryLetterInOrder",
-		fuzzyScoreRewardsConsecutiveLettersAtWordStartAndNeedsEveryLetterInOrder)
+	t.Run("fuzzyScoreRewardsConsecutiveLettersAtWordStart", fuzzyScoreRewardsConsecutiveLettersAtWordStart)
+	t.Run("fuzzyScoreIgnoresCase", fuzzyScoreIgnoresCase)
+	t.Run("fuzzyScoreSubtractsGapBeforeLetter", fuzzyScoreSubtractsGapBeforeLetter)
+	t.Run("fuzzyScoreRewardsLetterStartingWordAfterHyphen", fuzzyScoreRewardsLetterStartingWordAfterHyphen)
+	t.Run("fuzzyScoreMatchesNothingWithLettersOutOfOrder", fuzzyScoreMatchesNothingWithLettersOutOfOrder)
+	t.Run("fuzzyScoreMatchesEveryTextWithEmptyQuery", fuzzyScoreMatchesEveryTextWithEmptyQuery)
+	t.Run("emptyQueryRanksByNameWithNoHistory", emptyQueryRanksByNameWithNoHistory)
 	t.Run("emptyQueryRanksMostUsedFirstThenByName", emptyQueryRanksMostUsedFirstThenByName)
 	t.Run("queryKeepsCommandsHoldingItsLettersInOrderWithGaps", queryKeepsCommandsHoldingItsLettersInOrderWithGaps)
+	t.Run("queryRanksCommandStartingWithItFirst", queryRanksCommandStartingWithItFirst)
 	t.Run("historyCommandsNotOnDiskJoinWithoutDescriptionAndDiskCommandsListOnce",
 		historyCommandsNotOnDiskJoinWithoutDescriptionAndDiskCommandsListOnce)
 	t.Run("historyBoostLiftsUsedCommandAboveBetterMatch", historyBoostLiftsUsedCommandAboveBetterMatch)
 }
 
-func fuzzyScoreRewardsConsecutiveLettersAtWordStartAndNeedsEveryLetterInOrder(t *testing.T) {
-	cases := []struct {
-		text        string
-		query       string
-		wantScore   int
-		wantMatched bool
-	}{
-		// u at the start: 16+8, s next to it in the same run: 16+4+8
-		{text: "usage", query: "us", wantScore: 52, wantMatched: true},
-		{text: "Usage", query: "US", wantScore: 52, wantMatched: true},
-		// e after a gap of three letters: 24-3-1-1, then 16
-		{text: "usage", query: "ue", wantScore: 35, wantMatched: true},
-		{text: "add-dir", query: "d", wantScore: 24, wantMatched: true},
-		{text: "usage", query: "su", wantScore: 0, wantMatched: false},
-		{text: "usage", query: "", wantScore: 0, wantMatched: true},
-	}
-	for _, testCase := range cases {
-		score, matched := FuzzyScore(testCase.text, testCase.query)
-		if score != testCase.wantScore || matched != testCase.wantMatched {
-			t.Errorf("FuzzyScore(%q, %q) = %d, %t, want %d, %t", testCase.text, testCase.query, score, matched,
-				testCase.wantScore, testCase.wantMatched)
-		}
-	}
+func fuzzyScoreRewardsConsecutiveLettersAtWordStart(t *testing.T) {
+	score, matched := FuzzyScore("usage", "us")
+	// u at the start: 16+8, s next to it in the same run: 16+4+8
+	require.Equal(t, 52, score)
+	require.True(t, matched)
+}
+
+func fuzzyScoreIgnoresCase(t *testing.T) {
+	score, matched := FuzzyScore("Usage", "US")
+	require.Equal(t, 52, score)
+	require.True(t, matched)
+}
+
+func fuzzyScoreSubtractsGapBeforeLetter(t *testing.T) {
+	score, matched := FuzzyScore("usage", "ue")
+	// e after a gap of three letters: 24-3-1-1, then 16
+	require.Equal(t, 35, score)
+	require.True(t, matched)
+}
+
+func fuzzyScoreRewardsLetterStartingWordAfterHyphen(t *testing.T) {
+	score, matched := FuzzyScore("add-dir", "d")
+	require.Equal(t, 24, score)
+	require.True(t, matched)
+}
+
+func fuzzyScoreMatchesNothingWithLettersOutOfOrder(t *testing.T) {
+	score, matched := FuzzyScore("usage", "su")
+	require.Equal(t, 0, score)
+	require.False(t, matched)
+}
+
+func fuzzyScoreMatchesEveryTextWithEmptyQuery(t *testing.T) {
+	score, matched := FuzzyScore("usage", "")
+	require.Equal(t, 0, score)
+	require.True(t, matched)
 }
 
 func matchedNames(matches []slashMatch) []string {
@@ -67,31 +85,33 @@ func matchedNames(matches []slashMatch) []string {
 	return names
 }
 
+func emptyQueryRanksByNameWithNoHistory(t *testing.T) {
+	matches := RankedSlashCommands(slashTestCommands, []SlashUse{}, "", slashTestNow)
+	names := matchedNames(matches)
+	require.Equal(t, []string{"clear", "effort", "model", "usage"}, names)
+}
+
 func emptyQueryRanksMostUsedFirstThenByName(t *testing.T) {
 	uses := []SlashUse{
 		{Name: "model", Count: 1, Last: slashTestNow.Add(-48 * time.Hour)},
 		{Name: "usage", Count: 3, Last: slashTestNow.Add(-time.Minute)},
 	}
-	if names := matchedNames(RankedSlashCommands(slashTestCommands, []SlashUse{}, "", slashTestNow)); !reflect.DeepEqual(names,
-		[]string{"clear", "effort", "model", "usage"}) {
-		t.Errorf("names with no history = %v, want name order", names)
-	}
-	names := matchedNames(RankedSlashCommands(slashTestCommands, uses, "", slashTestNow))
-	if want := []string{"usage", "model", "clear", "effort"}; !reflect.DeepEqual(names, want) {
-		t.Errorf("names = %v, want %v", names, want)
-	}
+	matches := RankedSlashCommands(slashTestCommands, uses, "", slashTestNow)
+	names := matchedNames(matches)
+	require.Equal(t, []string{"usage", "model", "clear", "effort"}, names)
 }
 
 func queryKeepsCommandsHoldingItsLettersInOrderWithGaps(t *testing.T) {
-	names := matchedNames(RankedSlashCommands(slashTestCommands, []SlashUse{}, "mdl", slashTestNow))
-	if want := []string{"model"}; !reflect.DeepEqual(names, want) {
-		t.Errorf("names for mdl = %v, want %v", names, want)
-	}
-	names = matchedNames(RankedSlashCommands(slashTestCommands, []SlashUse{}, "e", slashTestNow))
+	matches := RankedSlashCommands(slashTestCommands, []SlashUse{}, "mdl", slashTestNow)
+	names := matchedNames(matches)
+	require.Equal(t, []string{"model"}, names)
+}
+
+func queryRanksCommandStartingWithItFirst(t *testing.T) {
+	matches := RankedSlashCommands(slashTestCommands, []SlashUse{}, "e", slashTestNow)
+	names := matchedNames(matches)
 	// effort starts with e; the others hold it inside a word
-	if want := []string{"effort", "clear", "model", "usage"}; !reflect.DeepEqual(names, want) {
-		t.Errorf("names for e = %v, want %v", names, want)
-	}
+	require.Equal(t, []string{"effort", "clear", "model", "usage"}, names)
 }
 
 func historyCommandsNotOnDiskJoinWithoutDescriptionAndDiskCommandsListOnce(t *testing.T) {
@@ -111,21 +131,17 @@ func historyCommandsNotOnDiskJoinWithoutDescriptionAndDiskCommandsListOnce(t *te
 	for _, match := range matches {
 		listed = append(listed, match.command)
 	}
-	if !reflect.DeepEqual(listed, want) {
-		t.Errorf("listed = %+v, want %+v", listed, want)
-	}
+	require.Equal(t, want, listed)
 	rows := slashMenuRows(matches, 0, 60, testAppearance)
-	if compactRow := strings.TrimRight(ansi.Strip(rows[0]), " "); compactRow != "   /compact" {
-		t.Errorf("row of compact = %q, want its name alone", compactRow)
-	}
+	compactRow := strings.TrimRight(ansi.Strip(rows[0]), " ")
+	require.Equal(t, "   /compact", compactRow)
 }
 
 func historyBoostLiftsUsedCommandAboveBetterMatch(t *testing.T) {
 	uses := []SlashUse{{Name: "model", Count: 20, Last: slashTestNow.Add(-time.Minute)}}
-	names := matchedNames(RankedSlashCommands(slashTestCommands, uses, "e", slashTestNow))
-	if names[0] != "model" {
-		t.Errorf("names for e = %v, want the much used model first", names)
-	}
+	matches := RankedSlashCommands(slashTestCommands, uses, "e", slashTestNow)
+	names := matchedNames(matches)
+	require.Equal(t, "model", names[0])
 }
 
 func TestSlashMenuRows(t *testing.T) {
@@ -145,9 +161,7 @@ func menuRowsAlignDescriptionsCutAtWidthAndColorSelectedName(t *testing.T) {
 		"   " + testAppearance.menuNameStyle.Render("/usage") + "   " +
 			testAppearance.workingStyle.Render("Show session cost, plan us…"),
 	}
-	if !reflect.DeepEqual(rows, want) {
-		t.Errorf("rows =\n%s\nwant\n%s", strings.Join(rows, "\n"), strings.Join(want, "\n"))
-	}
+	require.Equal(t, want, rows)
 }
 
 func menuRowsScrollToKeepSelectedShownAmongEight(t *testing.T) {
@@ -157,12 +171,11 @@ func menuRowsScrollToKeepSelectedShownAmongEight(t *testing.T) {
 	}
 	matches := RankedSlashCommands(commands, []SlashUse{}, "", slashTestNow)
 	rows := slashMenuRows(matches, 9, 80, testAppearance)
-	if len(rows) != slashMenuMaxRows {
-		t.Fatalf("menu shows %d rows, want %d", len(rows), slashMenuMaxRows)
-	}
-	if last := ansi.Strip(rows[len(rows)-1]); !strings.HasPrefix(last, "   /"+matches[9].command.Name+" ") {
-		t.Errorf("last row = %q, want the selected /%s", last, matches[9].command.Name)
-	}
+	require.Len(t, rows, slashMenuMaxRows)
+	last := ansi.Strip(rows[len(rows)-1])
+	selectedName := matches[9].command.Name
+	lastIsSelected := strings.HasPrefix(last, "   /"+selectedName+" ")
+	require.True(t, lastIsSelected, last)
 }
 
 func TestSlashMenu(t *testing.T) {
@@ -181,21 +194,17 @@ func TestSlashMenu(t *testing.T) {
 
 func corruptHistoryShowsErrorOnStatusLineAndKeepsDiskCommands(t *testing.T) {
 	historyFile := filepath.Join(t.TempDir(), "slash-history.json")
-	if err := os.WriteFile(historyFile, []byte("{not json"), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	writeErr := os.WriteFile(historyFile, []byte("{not json"), 0o644)
+	require.NoError(t, writeErr)
 	_, err := SavedSlashUses(historyFile)
-	if err == nil {
-		t.Fatal("SavedSlashUses of a corrupt file gave no error")
-	}
+	require.Error(t, err)
 	model := newZenModel(nil, testAppearance, "alt+x", "ctrl+e", historyFile).withSize(200, 20)
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: slashTestCommands, uses: nil, err: err})
-	if shownError := ansi.Strip(loaded.(zenModel).shownStatus()); shownError != err.Error() {
-		t.Errorf("status = %q, want %q", shownError, err.Error())
-	}
-	if commands := loaded.(zenModel).slashCommands; !reflect.DeepEqual(commands, slashTestCommands) {
-		t.Errorf("commands = %+v, want the ones on disk %+v", commands, slashTestCommands)
-	}
+	loadedModel := loaded.(zenModel)
+	shownError := ansi.Strip(loadedModel.shownStatus())
+	wantError := err.Error()
+	require.Equal(t, wantError, shownError)
+	require.Equal(t, slashTestCommands, loadedModel.slashCommands)
 }
 
 func typedKey(letter rune) tea.KeyPressMsg {
@@ -216,123 +225,91 @@ func keysSent(t *testing.T, model zenModel, keys ...tea.KeyPressMsg) zenModel {
 	t.Helper()
 	typed := pressedKeys(t, model, keys[:len(keys)-1]...)
 	updated, cmd := typed.Update(keys[len(keys)-1])
-	if cmd == nil {
-		t.Fatalf("%s returned no command", keys[len(keys)-1])
-	}
+	require.NotNil(t, cmd)
 	updated, _ = updated.Update(cmd())
 	return updated.(zenModel)
 }
 
 func slashInEmptyInputOpensMenuInPlaceOfStatusLine(t *testing.T) {
 	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('/'))
-	if model.slashMenu == nil {
-		t.Fatal("/ in the empty input opened no menu")
-	}
-	rows := strings.Split(ansi.Strip(model.screen()), "\n")
-	if len(rows) != 20 {
-		t.Errorf("screen has %d rows, want 20", len(rows))
-	}
+	require.NotNil(t, model.slashMenu)
+	screen := ansi.Strip(model.screen())
+	rows := strings.Split(screen, "\n")
+	require.Len(t, rows, 20)
 	menu := []string{}
 	for _, row := range rows[len(rows)-4:] {
 		menu = append(menu, strings.Fields(row)[0])
 	}
-	if want := []string{"/clear", "/effort", "/model", "/usage"}; !reflect.DeepEqual(menu, want) {
-		t.Errorf("rows under the input start %v, want %v:\n%s", menu, want, strings.Join(rows, "\n"))
-	}
-	if screen := strings.Join(rows, "\n"); strings.Contains(screen, "Opus · ctx 12%") {
-		t.Errorf("screen with the menu open still shows Claude's status line:\n%s", screen)
-	}
+	require.Equal(t, []string{"/clear", "/effort", "/model", "/usage"}, menu)
+	require.NotContains(t, screen, "Opus · ctx 12%")
 }
 
 func slashAfterTextOpensNoMenu(t *testing.T) {
-	if model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('a'), typedKey('/')); model.slashMenu != nil {
-		t.Error("/ after text opened the menu")
-	}
+	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('a'), typedKey('/'))
+	require.Nil(t, model.slashMenu)
 }
 
 func upAndDownMoveSelectionAndStopAtFirstAndLast(t *testing.T) {
 	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('/'))
-	cases := []struct {
-		key  tea.KeyPressMsg
-		want int
-	}{
-		{key: pressedKey(tea.KeyDown), want: 1},
-		{key: pressedKey(tea.KeyDown), want: 2},
-		{key: pressedKey(tea.KeyDown), want: 3},
-		{key: pressedKey(tea.KeyDown), want: 3},
-		{key: pressedKey(tea.KeyUp), want: 2},
-		{key: pressedKey(tea.KeyUp), want: 1},
-		{key: pressedKey(tea.KeyUp), want: 0},
-		{key: pressedKey(tea.KeyUp), want: 0},
-	}
-	for index, testCase := range cases {
-		model = pressedKeys(t, model, testCase.key)
-		if model.slashMenu.selected != testCase.want {
-			t.Errorf("after key %d (%s) selected = %d, want %d", index+1, testCase.key, model.slashMenu.selected,
-				testCase.want)
-		}
-	}
-	if model.rowsBelowView != 0 {
-		t.Errorf("up and down in the menu scrolled the view by %d rows", model.rowsBelowView)
-	}
+	model = pressedKeys(t, model, pressedKey(tea.KeyDown))
+	require.Equal(t, 1, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyDown))
+	require.Equal(t, 2, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyDown))
+	require.Equal(t, 3, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyDown))
+	require.Equal(t, 3, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyUp))
+	require.Equal(t, 2, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyUp))
+	require.Equal(t, 1, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyUp))
+	require.Equal(t, 0, model.slashMenu.selected)
+	model = pressedKeys(t, model, pressedKey(tea.KeyUp))
+	require.Equal(t, 0, model.slashMenu.selected)
+	require.Equal(t, 0, model.rowsBelowView)
 }
 
 func tabPutsSelectedNameAndSpaceInInputAndClosesMenu(t *testing.T) {
 	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('/'), pressedKey(tea.KeyDown), pressedKey(tea.KeyTab))
-	if model.slashMenu != nil {
-		t.Error("tab left the menu open")
-	}
-	if input := model.input.Value(); input != "/effort " {
-		t.Errorf("input after tab = %q, want %q", input, "/effort ")
-	}
+	require.Nil(t, model.slashMenu)
+	input := model.input.Value()
+	require.Equal(t, "/effort ", input)
 }
 
 func enterSendsSelectedCommand(t *testing.T) {
 	agent := &agentRecorder{}
 	keysSent(t, modelWithSlashCommands(t, agent), typedKey('/'), typedKey('m'), typedKey('l'), pressedKey(tea.KeyEnter))
-	if want := []string{"prompt /model"}; !reflect.DeepEqual(agent.calls, want) {
-		t.Errorf("calls = %v, want %v", agent.calls, want)
-	}
+	require.Equal(t, []string{"prompt /model"}, agent.calls)
 }
 
 func escClosesMenuAndKeepsInput(t *testing.T) {
 	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('/'), typedKey('u'), pressedKey(tea.KeyEscape))
-	if model.slashMenu != nil {
-		t.Error("esc left the menu open")
-	}
-	if input := model.input.Value(); input != "/u" {
-		t.Errorf("input after esc = %q, want %q", input, "/u")
-	}
-	if !strings.Contains(ansi.Strip(model.screen()), "Opus · ctx 12%") {
-		t.Errorf("screen after esc lacks Claude's status line:\n%s", ansi.Strip(model.screen()))
-	}
+	require.Nil(t, model.slashMenu)
+	input := model.input.Value()
+	require.Equal(t, "/u", input)
+	screen := ansi.Strip(model.screen())
+	require.Contains(t, screen, "Opus · ctx 12%")
 }
 
 func spaceClosesMenuAndEnterSendsAsTyped(t *testing.T) {
 	agent := &agentRecorder{}
 	model := pressedKeys(t, modelWithSlashCommands(t, agent), typedKey('/'), typedKey('u'), typedKey(' '))
-	if model.slashMenu != nil {
-		t.Fatal("a space left the menu open")
-	}
+	require.Nil(t, model.slashMenu)
 	keysSent(t, model, typedKey('x'), pressedKey(tea.KeyEnter))
-	if want := []string{"prompt /u x"}; !reflect.DeepEqual(agent.calls, want) {
-		t.Errorf("calls = %v, want %v", agent.calls, want)
-	}
+	require.Equal(t, []string{"prompt /u x"}, agent.calls)
 }
 
 func deletingSlashClosesMenu(t *testing.T) {
 	model := pressedKeys(t, modelWithSlashCommands(t, nil), typedKey('/'), pressedKey(tea.KeyBackspace))
-	if model.slashMenu != nil {
-		t.Error("deleting the / left the menu open")
-	}
+	require.Nil(t, model.slashMenu)
 }
 
 func slashOpensNoMenuWithNoCommandsOnDiskAndEmptyHistory(t *testing.T) {
 	model := newZenModel(nil, testAppearance, "alt+x", "ctrl+e", "").withSize(60, 20)
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: []claudecode.SlashCommand{}, uses: []SlashUse{}, err: nil})
-	if typed := pressedKeys(t, loaded.(zenModel), typedKey('/')); typed.slashMenu != nil {
-		t.Error("/ opened a menu with no command on disk and an empty history")
-	}
+	typed := pressedKeys(t, loaded.(zenModel), typedKey('/'))
+	require.Nil(t, typed.slashMenu)
 }
 
 func loadedDiskCommandsAndHistoryFillMenu(t *testing.T) {
@@ -340,14 +317,14 @@ func loadedDiskCommandsAndHistoryFillMenu(t *testing.T) {
 	loaded, _ := model.Update(slashCommandsLoadedMsg{commands: []claudecode.SlashCommand{
 		{Name: "tidy", Description: "Tidy the imports (user)"},
 	}, uses: []SlashUse{{Name: "effort", Count: 1, Last: time.Now()}}, err: nil})
-	rows := strings.Split(ansi.Strip(pressedKeys(t, loaded.(zenModel), typedKey('/')).screen()), "\n")
+	typed := pressedKeys(t, loaded.(zenModel), typedKey('/'))
+	screen := ansi.Strip(typed.screen())
+	rows := strings.Split(screen, "\n")
 	menu := []string{}
 	for _, row := range rows[len(rows)-2:] {
 		menu = append(menu, strings.TrimRight(row, " "))
 	}
-	if want := []string{"   /effort", "   /tidy    Tidy the imports (user)"}; !reflect.DeepEqual(menu, want) {
-		t.Errorf("rows under the input = %q, want %q:\n%s", menu, want, strings.Join(rows, "\n"))
-	}
+	require.Equal(t, []string{"   /effort", "   /tidy    Tidy the imports (user)"}, menu)
 }
 
 func TestSlashCommandSent(t *testing.T) {
@@ -360,9 +337,8 @@ func TestSlashCommandSent(t *testing.T) {
 
 func failedHistoryWriteShowsErrorOnStatusLine(t *testing.T) {
 	blocker := filepath.Join(t.TempDir(), "calmpane")
-	if err := os.WriteFile(blocker, []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	blockerErr := os.WriteFile(blocker, []byte{}, 0o644)
+	require.NoError(t, blockerErr)
 	model := modelWithSlashCommands(t, &agentRecorder{pickerShown: true})
 	model.slashHistoryFile = filepath.Join(blocker, "slash-history.json")
 	sent, cmd := model.Update(promptSentMsg{prompt: "/usage", pastes: nil, err: nil})
@@ -373,12 +349,11 @@ func failedHistoryWriteShowsErrorOnStatusLine(t *testing.T) {
 			sent, _ = sent.Update(msg)
 		}
 	}
-	if writeErr == nil {
-		t.Fatal("writing the history under a file gave no error")
-	}
-	if shownError := ansi.Strip(sent.(zenModel).shownStatus()); shownError != writeErr.Error() {
-		t.Errorf("status = %q, want %q", shownError, writeErr.Error())
-	}
+	require.Error(t, writeErr)
+	sentModel := sent.(zenModel)
+	shownError := ansi.Strip(sentModel.shownStatus())
+	wantError := writeErr.Error()
+	require.Equal(t, wantError, shownError)
 }
 
 // msgsOf runs cmd and the commands of a batch it gives, as bubbletea would, and gives their messages.
@@ -398,40 +373,32 @@ func msgsOf(cmd tea.Cmd) []tea.Msg {
 func sentCommandNotListedCountsUnderTypedNameInHistoryFile(t *testing.T) {
 	model := modelWithSlashCommands(t, &agentRecorder{pickerShown: true})
 	sent, cmd := model.Update(promptSentMsg{prompt: "/compact keep the tests", pastes: nil, err: nil})
-	if cmd == nil {
-		t.Fatal("a sent slash command gave no command to write the history")
-	}
+	require.NotNil(t, cmd)
 	for _, msg := range msgsOf(cmd) {
-		if written, isWritten := msg.(slashUsesWrittenMsg); isWritten && written.err != nil {
-			t.Fatalf("write the history: %v", written.err)
+		if written, isWritten := msg.(slashUsesWrittenMsg); isWritten {
+			require.NoError(t, written.err)
 		}
 	}
 	saved, err := SavedSlashUses(model.slashHistoryFile)
-	if err != nil {
-		t.Fatalf("SavedSlashUses: %v", err)
-	}
-	if len(saved) != 1 || saved[0].Name != "compact" || saved[0].Count != 1 {
-		t.Errorf("history = %+v, want compact once", saved)
-	}
-	if uses := sent.(zenModel).slashUses; len(uses) != 1 || uses[0].Name != "compact" {
-		t.Errorf("model's uses = %+v, want compact once", uses)
-	}
+	require.NoError(t, err)
+	require.Len(t, saved, 1)
+	require.Equal(t, "compact", saved[0].Name)
+	require.Equal(t, 1, saved[0].Count)
+	uses := sent.(zenModel).slashUses
+	require.Len(t, uses, 1)
+	require.Equal(t, "compact", uses[0].Name)
 }
 
 func sentPathIsNotCountedInHistory(t *testing.T) {
 	model := modelWithSlashCommands(t, &agentRecorder{pickerShown: true})
 	sent, cmd := model.Update(promptSentMsg{prompt: "/tmp/x is empty", pastes: nil, err: nil})
 	for _, msg := range msgsOf(cmd) {
-		if _, isWritten := msg.(slashUsesWrittenMsg); isWritten {
-			t.Error("a sent path wrote the history")
-		}
+		require.IsNotType(t, slashUsesWrittenMsg{}, msg)
 	}
-	if uses := sent.(zenModel).slashUses; len(uses) != 0 {
-		t.Errorf("model's uses = %+v, want none", uses)
-	}
-	if _, err := os.Stat(model.slashHistoryFile); !errors.Is(err, fs.ErrNotExist) {
-		t.Errorf("stat the history file: %v, want it not written", err)
-	}
+	uses := sent.(zenModel).slashUses
+	require.Empty(t, uses)
+	_, statErr := os.Stat(model.slashHistoryFile)
+	require.ErrorIs(t, statErr, fs.ErrNotExist)
 }
 
 func pickerAfterCommandShowsWaitingLineUntilInputBoxReturns(t *testing.T) {
@@ -442,14 +409,13 @@ func pickerAfterCommandShowsWaitingLineUntilInputBoxReturns(t *testing.T) {
 			sent, _ = sent.Update(msg)
 		}
 	}
-	waiting := ansi.Strip(sent.(zenModel).shownStatus())
-	if want := "Waiting for you in Claude. Press alt+x to answer."; waiting != want {
-		t.Errorf("status with the picker shown = %q, want %q", waiting, want)
-	}
+	sentModel := sent.(zenModel)
+	waiting := ansi.Strip(sentModel.shownStatus())
+	require.Equal(t, "Waiting for you in Claude. Press alt+x to answer.", waiting)
 	closed, _ := sent.Update(agentPickerClosedMsg{prompt: "/model", err: nil})
-	if statusAfterClose := ansi.Strip(closed.(zenModel).shownStatus()); strings.Contains(statusAfterClose, "Waiting for you") {
-		t.Errorf("status after the picker closed = %q, want the waiting line gone", statusAfterClose)
-	}
+	closedModel := closed.(zenModel)
+	statusAfterClose := ansi.Strip(closedModel.shownStatus())
+	require.NotContains(t, statusAfterClose, "Waiting for you")
 }
 
 func settledCommandDropsItsEarlyBandUnlessQueued(t *testing.T) {
@@ -457,12 +423,10 @@ func settledCommandDropsItsEarlyBandUnlessQueued(t *testing.T) {
 	model.input.SetValue("/model")
 	sent, _ := model.withKey(pressedKey(tea.KeyEnter))
 	settled, _ := sent.Update(slashCommandSettledMsg{prompt: "/model", err: nil})
-	if screen := entriesText(t, settled.(zenModel)); strings.Contains(screen, "> /model") {
-		t.Errorf("screen after the command settled still shows its band:\n%s", screen)
-	}
+	settledEntries := entriesText(t, settled.(zenModel))
+	require.NotContains(t, settledEntries, "> /model")
 	queued := sent.(zenModel).withEarlyPromptMarkedQueuedAt(0)
 	stillQueued, _ := queued.Update(slashCommandSettledMsg{prompt: "/model", err: nil})
-	if screen := entriesText(t, stillQueued.(zenModel)); !strings.Contains(screen, "> /model") {
-		t.Errorf("screen after a queued command settled lacks its band:\n%s", screen)
-	}
+	queuedEntries := entriesText(t, stillQueued.(zenModel))
+	require.Contains(t, queuedEntries, "> /model")
 }

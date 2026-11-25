@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -94,6 +95,7 @@ type queueOperationRecord struct {
 
 type contentBlock struct {
 	Type  string          `json:"type"`
+	ID    string          `json:"id"`
 	Text  string          `json:"text"`
 	Name  string          `json:"name"`
 	Input json.RawMessage `json:"input"`
@@ -269,38 +271,53 @@ func TurnAfterLine(turn CurrentTurn, line []byte, lineEntries []DialogueEntry) (
 	holdsPrompt := slices.ContainsFunc(lineEntries, func(entry DialogueEntry) bool {
 		return entry.Kind == PromptEntry || entry.Kind == CommandEntry
 	})
-	if !holdsPrompt && !bytes.Contains(line, []byte(`"type":"tool_use"`)) {
-		return turn, nil
+	if holdsPrompt {
+		var record transcriptRecord
+		if err := json.Unmarshal(line, &record); err != nil {
+			return turn, fmt.Errorf("decode transcript line %.80q: %w", line, err)
+		}
+		// A queued_command attachment is a prompt Claude took in mid-turn, so the turn it joins keeps its time.
+		if record.Type == "attachment" && !turn.PromptTime.IsZero() {
+			return turn, nil
+		}
+		return CurrentTurn{PromptTime: record.Timestamp}, nil
+	}
+	toolCall, holdsToolCall, err := newestToolCall(line)
+	if err != nil || !holdsToolCall {
+		return turn, err
+	}
+	return CurrentTurn{PromptTime: turn.PromptTime, ToolCallActivity: toolCall.activity}, nil
+}
+
+type toolCall struct {
+	activity  string
+	timestamp time.Time
+}
+
+// newestToolCall is the last tool_use of an assistant record, with holdsToolCall false for a line that holds none.
+func newestToolCall(line []byte) (newest toolCall, holdsToolCall bool, err error) {
+	if !bytes.Contains(line, []byte(`"type":"tool_use"`)) {
+		return toolCall{}, false, nil
 	}
 	var record transcriptRecord
 	if err := json.Unmarshal(line, &record); err != nil {
-		return turn, fmt.Errorf("decode transcript line %.80q: %w", line, err)
-	}
-	// A queued_command attachment is a prompt Claude took in mid-turn, so the turn it joins keeps its time.
-	if holdsPrompt && record.Type == "attachment" && !turn.PromptTime.IsZero() {
-		return turn, nil
-	}
-	if holdsPrompt {
-		return CurrentTurn{PromptTime: record.Timestamp}, nil
+		return toolCall{}, false, fmt.Errorf("decode transcript line %.80q: %w", line, err)
 	}
 	if record.Type != "assistant" {
-		return turn, nil
+		return toolCall{}, false, nil
 	}
 	var blocks []contentBlock
 	if err := json.Unmarshal(record.Message.Content, &blocks); err != nil {
-		return turn, fmt.Errorf("decode assistant content %.80q: %w", record.Message.Content, err)
+		return toolCall{}, false, fmt.Errorf("decode assistant content %.80q: %w", record.Message.Content, err)
 	}
 	for index := len(blocks) - 1; index >= 0; index-- {
 		if blocks[index].Type != "tool_use" {
 			continue
 		}
 		activity, err := toolCallActivity(blocks[index].Name, blocks[index].Input)
-		if err != nil {
-			return turn, err
-		}
-		return CurrentTurn{PromptTime: turn.PromptTime, ToolCallActivity: activity}, nil
+		return toolCall{activity: activity, timestamp: record.Timestamp}, err == nil, err
 	}
-	return turn, nil
+	return toolCall{}, false, nil
 }
 
 func toolCallActivity(toolName string, input json.RawMessage) (string, error) {
@@ -325,6 +342,19 @@ func toolCallActivity(toolName string, input json.RawMessage) (string, error) {
 	default:
 		return "", nil
 	}
+}
+
+// SeekToTail moves file to the first whole line of its last 2 MB and returns that offset.
+func SeekToTail(file *os.File) (int64, error) {
+	info, err := file.Stat()
+	if err != nil {
+		return 0, err
+	}
+	start, err := TailStart(file, info.Size(), 2*1024*1024)
+	if err != nil {
+		return 0, err
+	}
+	return file.Seek(start, io.SeekStart)
 }
 
 func TailStart(file io.ReaderAt, fileSize int64, tailBytes int64) (int64, error) {

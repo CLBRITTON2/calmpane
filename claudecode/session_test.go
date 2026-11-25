@@ -6,6 +6,9 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
 
 func TestConversationSession(t *testing.T) {
@@ -29,66 +32,53 @@ func waitForTranscriptSendsSessionBeforeFirstPromptWritesTranscript(t *testing.T
 	conversationSessionIDs := make(chan string, 1)
 	go func() {
 		transcript, err := WaitForTranscript(sessionID, conversationSessionIDs)
-		if err != nil {
-			t.Error(err)
-		}
+		assert.NoError(t, err)
 		opened <- transcript
 	}()
 	time.Sleep(time.Second)
-	select {
-	case <-opened:
-		t.Fatal("opened before Claude wrote the transcript")
-	default:
-	}
-	select {
-	case conversationSessionID := <-conversationSessionIDs:
-		if conversationSessionID != sessionID {
-			t.Errorf("conversation session = %s, want %s", conversationSessionID, sessionID)
-		}
-	default:
-		t.Error("no conversation session a second into the wait")
-	}
+	require.Empty(t, opened, "opened before Claude wrote the transcript")
+	require.Len(t, conversationSessionIDs, 1, "no conversation session a second into the wait")
+	conversationSessionID := <-conversationSessionIDs
+	require.Equal(t, sessionID, conversationSessionID)
+
 	projectDir := filepath.Join(home, ".claude", "projects", "C--work")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
+	err := os.MkdirAll(projectDir, 0o755)
+	require.NoError(t, err)
 	transcriptPath := filepath.Join(projectDir, sessionID+".jsonl")
-	if err := os.WriteFile(transcriptPath, []byte{}, 0o644); err != nil {
-		t.Fatal(err)
-	}
+	err = os.WriteFile(transcriptPath, []byte{}, 0o644)
+	require.NoError(t, err)
+
+	var transcript *os.File
 	select {
-	case transcript := <-opened:
-		if transcript == nil || transcript.Name() != transcriptPath {
-			t.Fatalf("opened %v, want %s", transcript, transcriptPath)
-		}
-		if err := transcript.Close(); err != nil {
-			t.Fatal(err)
-		}
+	case transcript = <-opened:
 	case <-time.After(5 * time.Second):
-		t.Fatal("still waiting 5 s after Claude wrote the transcript")
+		require.FailNow(t, "still waiting 5 s after Claude wrote the transcript")
 	}
+	require.NotNil(t, transcript)
+	openedPath := transcript.Name()
+	require.Equal(t, transcriptPath, openedPath)
+	err = transcript.Close()
+	require.NoError(t, err)
 }
 
 func writeTestTranscript(t *testing.T, home string, sessionID string, content string) {
 	t.Helper()
 	projectDir := filepath.Join(home, ".claude", "projects", "C--work")
-	if err := os.MkdirAll(projectDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(projectDir, sessionID+".jsonl"), []byte(content), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	err := os.MkdirAll(projectDir, 0o755)
+	require.NoError(t, err)
+	transcriptPath := filepath.Join(projectDir, sessionID+".jsonl")
+	err = os.WriteFile(transcriptPath, []byte(content), 0o644)
+	require.NoError(t, err)
 }
 
 func writeTestJobState(t *testing.T, home string, jobID string, stateJSON string) {
 	t.Helper()
 	jobDir := filepath.Join(home, ".claude", "jobs", jobID)
-	if err := os.MkdirAll(jobDir, 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(jobDir, "state.json"), []byte(stateJSON), 0o644); err != nil {
-		t.Fatal(err)
-	}
+	err := os.MkdirAll(jobDir, 0o755)
+	require.NoError(t, err)
+	statePath := filepath.Join(jobDir, "state.json")
+	err = os.WriteFile(statePath, []byte(stateJSON), 0o644)
+	require.NoError(t, err)
 }
 
 func conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened(t *testing.T) {
@@ -102,13 +92,10 @@ func conversationSessionIDIsSessionOfLastBackgroundJobResumeOpened(t *testing.T)
 			`{"type":"user","message":{"role":"user","content":[{"type":"tool_result","content":"{\"subtype\":\"local_command\",\"content\":\"running in the background (33334444)\"}"}]}}`+"\n"+
 			`{"type":"continued-in","continuedInSessionId":"87cbbea0-e025-4895-9cf0-cdca634d2499"}`+"\n")
 	writeTestJobState(t, home, "26f6d8f1", `{"sessionId":"`+jobSessionID+`"}`)
-	got, err := ConversationSessionID(viewerSessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != jobSessionID {
-		t.Errorf("ConversationSessionID = %s, want %s", got, jobSessionID)
-	}
+
+	conversationSessionID, err := ConversationSessionID(viewerSessionID)
+	require.NoError(t, err)
+	require.Equal(t, jobSessionID, conversationSessionID)
 }
 
 const resumeOpenedJobLine = `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening \"second\", running in the background (26f6d8f1)</local-command-stdout>"}` + "\n"
@@ -121,19 +108,19 @@ func waitForTranscriptOpensTranscriptAndSendsSessionOfBackgroundJobResumeOpened(
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
 	writeTestJobState(t, home, "26f6d8f1", `{"sessionId":"`+jobSessionID+`"}`)
 	writeTestTranscript(t, home, jobSessionID, "")
+
 	conversationSessionIDs := make(chan string, 1)
 	transcript, err := WaitForTranscript(viewerSessionID, conversationSessionIDs)
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer transcript.Close()
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeErr := transcript.Close()
+		require.NoError(t, closeErr)
+	})
+	openedPath := transcript.Name()
 	wantTranscriptPath := filepath.Join(home, ".claude", "projects", "C--work", jobSessionID+".jsonl")
-	if transcript.Name() != wantTranscriptPath {
-		t.Errorf("opened %s, want %s", transcript.Name(), wantTranscriptPath)
-	}
-	if conversationSessionID := <-conversationSessionIDs; conversationSessionID != jobSessionID {
-		t.Errorf("conversation session = %s, want %s", conversationSessionID, jobSessionID)
-	}
+	require.Equal(t, wantTranscriptPath, openedPath)
+	conversationSessionID := <-conversationSessionIDs
+	require.Equal(t, jobSessionID, conversationSessionID)
 }
 
 func conversationSessionIDFailsNamingMissingJobStateFile(t *testing.T) {
@@ -141,10 +128,10 @@ func conversationSessionIDFailsNamingMissingJobStateFile(t *testing.T) {
 	t.Setenv("USERPROFILE", home)
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
+
 	_, err := ConversationSessionID(viewerSessionID)
-	if err == nil || !strings.Contains(err.Error(), filepath.Join("jobs", "26f6d8f1", "state.json")) {
-		t.Fatalf("ConversationSessionID error = %v, want one naming the job's state.json", err)
-	}
+	jobStatePath := filepath.Join("jobs", "26f6d8f1", "state.json")
+	require.ErrorContains(t, err, jobStatePath)
 }
 
 func conversationSessionIDFailsWhenJobStateHasNoSessionID(t *testing.T) {
@@ -153,29 +140,26 @@ func conversationSessionIDFailsWhenJobStateHasNoSessionID(t *testing.T) {
 	const viewerSessionID = "4d7d6a4d-cb1b-4769-8c91-14109817ff8e"
 	writeTestTranscript(t, home, viewerSessionID, resumeOpenedJobLine)
 	writeTestJobState(t, home, "26f6d8f1", `{}`)
+
 	_, err := ConversationSessionID(viewerSessionID)
-	if err == nil || !strings.Contains(err.Error(), "has no sessionId") {
-		t.Fatalf("ConversationSessionID error = %v, want one saying state.json has no sessionId", err)
-	}
+	require.ErrorContains(t, err, "has no sessionId")
 }
 
 func lastOpenedBackgroundJobSkipsLastLineClaudeIsStillWriting(t *testing.T) {
 	transcript := resumeOpenedJobLine + `{"type":"system","subtype":"local_command","content":"<local-command-stdout>Opening`
-	got, err := lastOpenedBackgroundJob(strings.NewReader(transcript))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != "26f6d8f1" {
-		t.Errorf("lastOpenedBackgroundJob = %q, want 26f6d8f1", got)
-	}
+	transcriptReader := strings.NewReader(transcript)
+
+	jobID, err := lastOpenedBackgroundJob(transcriptReader)
+	require.NoError(t, err)
+	require.Equal(t, "26f6d8f1", jobID)
 }
 
 func lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry(t *testing.T) {
 	transcript := `{"type":"system","subtype":"local_command","content":"cut` + "\n"
-	_, err := lastOpenedBackgroundJob(strings.NewReader(transcript))
-	if err == nil || !strings.Contains(err.Error(), "decode local command entry") {
-		t.Fatalf("lastOpenedBackgroundJob error = %v, want one naming the undecodable entry", err)
-	}
+	transcriptReader := strings.NewReader(transcript)
+
+	_, err := lastOpenedBackgroundJob(transcriptReader)
+	require.ErrorContains(t, err, "decode local command entry")
 }
 
 func conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob(t *testing.T) {
@@ -183,11 +167,8 @@ func conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob(t *te
 	t.Setenv("USERPROFILE", home)
 	const sessionID = "6da29299-87e9-4418-8fa0-53925bdf322e"
 	writeTestTranscript(t, home, sessionID, `{"type":"user","message":{"role":"user","content":"first"}}`+"\n")
-	got, err := ConversationSessionID(sessionID)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if got != sessionID {
-		t.Errorf("ConversationSessionID = %s, want %s", got, sessionID)
-	}
+
+	conversationSessionID, err := ConversationSessionID(sessionID)
+	require.NoError(t, err)
+	require.Equal(t, sessionID, conversationSessionID)
 }

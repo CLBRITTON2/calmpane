@@ -3,9 +3,10 @@ package config
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestParse(t *testing.T) {
@@ -27,9 +28,7 @@ func TestParse(t *testing.T) {
 
 func exampleParsesToRosePineWithStatusLineDirUnderProfile(t *testing.T) {
 	profile, err := os.UserHomeDir()
-	if err != nil {
-		t.Fatalf("UserHomeDir: %v", err)
-	}
+	require.NoError(t, err)
 	want := Config{
 		Colors: Colors{
 			PromptBand: "#26233a", PromptMarker: "#c4a7e7", PromptText: "#e0def4", PromptNote: "#6e6a86",
@@ -43,54 +42,35 @@ func exampleParsesToRosePineWithStatusLineDirUnderProfile(t *testing.T) {
 		Keys:       Keys{ClaudeScreen: "alt+x", ExpandPaste: "ctrl+e"},
 	}
 	got, err := Example()
-	if err != nil {
-		t.Fatalf("Example: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("example = %+v, want %+v", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 func missingFileIsWrittenWithExampleThenRead(t *testing.T) {
 	file := filepath.Join(t.TempDir(), "calmpane", "config.toml")
 	got, err := Load(file)
-	if err != nil {
-		t.Fatalf("Load: %v", err)
-	}
+	require.NoError(t, err)
 	written, err := os.ReadFile(file)
-	if err != nil {
-		t.Fatalf("read the written config: %v", err)
-	}
-	if string(written) != string(exampleDocument) {
-		t.Errorf("written config = %q, want the example", written)
-	}
+	require.NoError(t, err)
+	require.Equal(t, string(exampleDocument), string(written))
 	want, err := Example()
-	if err != nil {
-		t.Fatalf("Example: %v", err)
-	}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("loaded config = %+v, want the example %+v", got, want)
-	}
+	require.NoError(t, err)
+	require.Equal(t, want, got)
 }
 
 // exampleWith is the example document with its line old replaced by replacement.
 func exampleWith(t *testing.T, old string, replacement string) []byte {
 	document := string(exampleDocument)
-	if !strings.Contains(document, old) {
-		t.Fatalf("the example has no line %q", old)
-	}
-	return []byte(strings.Replace(document, old, replacement, 1))
+	require.Contains(t, document, old)
+	replaced := strings.Replace(document, old, replacement, 1)
+	return []byte(replaced)
 }
 
 func assertParseFailsWith(t *testing.T, document []byte, wantParts []string) {
 	_, err := Parse(document)
-	if err == nil {
-		t.Fatalf("Parse succeeded, want an error holding %q", wantParts)
-	}
+	require.Error(t, err)
 	for _, part := range wantParts {
-		if !strings.Contains(err.Error(), part) {
-			t.Errorf("error = %q, want it to hold %q", err, part)
-		}
+		require.ErrorContains(t, err, part)
 	}
 }
 
@@ -100,62 +80,59 @@ func unknownFieldFailsNamingFieldAndLine(t *testing.T) {
 }
 
 func missingFieldFailsNamingField(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `inline_code = "#f6c177"`, ""), []string{"missing field colors.inline_code"})
+	document := exampleWith(t, `inline_code = "#f6c177"`, "")
+	assertParseFailsWith(t, document, []string{"missing field colors.inline_code"})
 }
 
 func badColorFailsNamingFieldAndValue(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `heading = "#c4a7e7"`, `heading = "c4a7e7"`),
-		[]string{`colors.heading = "c4a7e7"`})
+	document := exampleWith(t, `heading = "#c4a7e7"`, `heading = "c4a7e7"`)
+	assertParseFailsWith(t, document, []string{`colors.heading = "c4a7e7"`})
 }
 
 func unknownThemeFailsNamingFieldAndValue(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `theme = "rose-pine"`, `theme = "rose-pink"`),
-		[]string{`code.theme = "rose-pink"`})
+	document := exampleWith(t, `theme = "rose-pine"`, `theme = "rose-pink"`)
+	assertParseFailsWith(t, document, []string{`code.theme = "rose-pink"`})
 }
 
 func wideLineCharacterFailsNamingFieldAndValue(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `separator = "─"`, `separator = "──"`), []string{`lines.separator = "──"`})
+	document := exampleWith(t, `separator = "─"`, `separator = "──"`)
+	assertParseFailsWith(t, document, []string{`lines.separator = "──"`})
 }
 
 func badCommentStyleFailsNamingFieldAndValue(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `comment = "bold #c4a7e7"`, `comment = "heavy #c4a7e7"`),
-		[]string{`code.comment = "heavy #c4a7e7"`})
+	document := exampleWith(t, `comment = "bold #c4a7e7"`, `comment = "heavy #c4a7e7"`)
+	assertParseFailsWith(t, document, []string{`code.comment = "heavy #c4a7e7"`})
 }
 
 func emptyClaudeScreenKeyFailsNamingField(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `claude_screen = "alt+x"`, `claude_screen = ""`), []string{`keys.claude_screen = ""`})
+	document := exampleWith(t, `claude_screen = "alt+x"`, `claude_screen = ""`)
+	assertParseFailsWith(t, document, []string{`keys.claude_screen = ""`})
 }
 
 func missingExpandPasteKeyFailsNamingField(t *testing.T) {
-	assertParseFailsWith(t, exampleWith(t, `expand_paste = "ctrl+e"`, ""), []string{"missing field keys.expand_paste"})
+	document := exampleWith(t, `expand_paste = "ctrl+e"`, "")
+	assertParseFailsWith(t, document, []string{"missing field keys.expand_paste"})
 }
 
 func expandPasteKeyNotWrittenAsBubbleteaKeyFailsNamingFieldAndValue(t *testing.T) {
 	for _, key := range []string{"", "ctrl+", "control+e", "shift+ctrl+e", "ctrl+ctrl+e", "ctrl+enterr", "ctrl+ee", " "} {
-		assertParseFailsWith(t, exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`),
-			[]string{`keys.expand_paste = "` + key + `" is not a key name`})
+		document := exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`)
+		assertParseFailsWith(t, document, []string{`keys.expand_paste = "` + key + `" is not a key name`})
 	}
 }
 
 func expandPasteKeyWrittenAsBubbleteaKeyParses(t *testing.T) {
 	for _, key := range []string{"ctrl+o", "alt+enter", "f5", "ctrl+shift+up", "ctrl+space", "?"} {
-		got, err := Parse(exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`))
-		if err != nil {
-			t.Errorf("Parse with expand_paste %q: %v", key, err)
-			continue
-		}
-		if got.Keys.ExpandPaste != key {
-			t.Errorf("keys.expand_paste = %q, want %q", got.Keys.ExpandPaste, key)
-		}
+		document := exampleWith(t, `expand_paste = "ctrl+e"`, `expand_paste = "`+key+`"`)
+		got, err := Parse(document)
+		require.NoError(t, err)
+		require.Equal(t, key, got.Keys.ExpandPaste)
 	}
 }
 
 func emptyStatusLineDirStaysEmpty(t *testing.T) {
-	got, err := Parse(exampleWith(t, `dir = '~\AppData\Local\windows-dev\statusline'`, `dir = ""`))
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	if got.StatusLine.Dir != "" {
-		t.Errorf("status_line.dir = %q, want empty", got.StatusLine.Dir)
-	}
+	document := exampleWith(t, `dir = '~\AppData\Local\windows-dev\statusline'`, `dir = ""`)
+	got, err := Parse(document)
+	require.NoError(t, err)
+	require.Empty(t, got.StatusLine.Dir)
 }

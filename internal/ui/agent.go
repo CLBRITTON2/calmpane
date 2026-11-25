@@ -37,9 +37,14 @@ const (
 	AgentIdle
 	AgentDone
 	AgentBlocked
+	// AgentGone is the status of an agent that has exited, which ends the zen view.
+	AgentGone
 )
 
 var ErrAgentBlocked = errors.New("the agent waits for an answer and takes no prompt")
+
+// ErrAgentGone is WaitForSessionID's error once herdr reports no claude agent in the Claude pane.
+var ErrAgentGone = errors.New("No Claude session in this pane.")
 
 var ErrClaudeInputHoldsPaste = errors.New("Claude's input holds pasted text. Send or clear it in Claude first.")
 

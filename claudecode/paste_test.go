@@ -1,96 +1,115 @@
 package claudecode
 
 import (
-	"reflect"
 	"strings"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestPaste(t *testing.T) {
-	t.Run("pasteOverEightHundredCharsOrTwoLineBreaksIsShownAsLabel", pasteOverEightHundredCharsOrTwoLineBreaksIsShownAsLabel)
+	t.Run("pasteOfEightHundredCharsIsNotShownAsLabel", pasteOfEightHundredCharsIsNotShownAsLabel)
+	t.Run("pasteOverEightHundredCharsIsShownAsLabel", pasteOverEightHundredCharsIsShownAsLabel)
+	t.Run("pasteOfTwoLineBreaksIsNotShownAsLabel", pasteOfTwoLineBreaksIsNotShownAsLabel)
+	t.Run("pasteOverTwoLineBreaksIsShownAsLabel", pasteOverTwoLineBreaksIsShownAsLabel)
 	t.Run("pasteLabelCountsLineBreaksAsLines", pasteLabelCountsLineBreaksAsLines)
+	t.Run("pasteLabelOfOneLongLineHasNoLineCount", pasteLabelOfOneLongLineHasNoLineCount)
 	t.Run("collapsedTextExpandsBackToSameText", collapsedTextExpandsBackToSameText)
 	t.Run("textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel",
 		textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel)
-	t.Run("textHoldsPasteLabelOnlyInPasteLabelForm", textHoldsPasteLabelOnlyInPasteLabelForm)
+	t.Run("textHoldsPasteLabelWithinTypedText", textHoldsPasteLabelWithinTypedText)
+	t.Run("textHoldsPasteLabelWithLineCount", textHoldsPasteLabelWithLineCount)
+	t.Run("textHoldsNoPasteLabelForLabelStartAlone", textHoldsNoPasteLabelForLabelStartAlone)
+	t.Run("textHoldsNoPasteLabelForLabelsWithoutNumber", textHoldsNoPasteLabelForLabelsWithoutNumber)
 	t.Run("emptyPasteKeepsItsNumberAndHasNoLabel", emptyPasteKeepsItsNumberAndHasNoLabel)
 }
 
-func textHoldsPasteLabelOnlyInPasteLabelForm(t *testing.T) {
-	cases := []struct {
-		text string
-		want bool
-	}{
-		{text: "see " + PasteLabel(1, strings.Repeat("x", 900)) + " first", want: true},
-		{text: PasteLabel(12, "a\nb\nc\nd"), want: true},
-		{text: "[Pasted text", want: false},
-		{text: "[Pasted text #] and [Pasted text #2 lines]", want: false},
-	}
-	for _, testCase := range cases {
-		if got := HoldsPasteLabel(testCase.text); got != testCase.want {
-			t.Errorf("HoldsPasteLabel(%q) = %v, want %v", testCase.text, got, testCase.want)
-		}
-	}
+func textHoldsPasteLabelWithinTypedText(t *testing.T) {
+	longLine := strings.Repeat("x", 900)
+	label := PasteLabel(1, longLine)
+	text := "see " + label + " first"
+	holds := HoldsPasteLabel(text)
+	require.True(t, holds)
 }
 
-func pasteOverEightHundredCharsOrTwoLineBreaksIsShownAsLabel(t *testing.T) {
-	cases := []struct {
-		paste string
-		want  bool
-	}{
-		{paste: strings.Repeat("é", 800), want: false},
-		{paste: strings.Repeat("é", 801), want: true},
-		{paste: "one\ntwo\nthree", want: false},
-		{paste: "one\ntwo\nthree\nfour", want: true},
-	}
-	for _, testCase := range cases {
-		if got := IsShownAsLabel(testCase.paste); got != testCase.want {
-			t.Errorf("IsShownAsLabel(%.20q, %d runes) = %v, want %v", testCase.paste,
-				len([]rune(testCase.paste)), got, testCase.want)
-		}
-	}
+func textHoldsPasteLabelWithLineCount(t *testing.T) {
+	text := PasteLabel(12, "a\nb\nc\nd")
+	holds := HoldsPasteLabel(text)
+	require.True(t, holds)
+}
+
+func textHoldsNoPasteLabelForLabelStartAlone(t *testing.T) {
+	holds := HoldsPasteLabel("[Pasted text")
+	require.False(t, holds)
+}
+
+func textHoldsNoPasteLabelForLabelsWithoutNumber(t *testing.T) {
+	holds := HoldsPasteLabel("[Pasted text #] and [Pasted text #2 lines]")
+	require.False(t, holds)
+}
+
+func pasteOfEightHundredCharsIsNotShownAsLabel(t *testing.T) {
+	paste := strings.Repeat("é", 800)
+	shownAsLabel := IsShownAsLabel(paste)
+	require.False(t, shownAsLabel)
+}
+
+func pasteOverEightHundredCharsIsShownAsLabel(t *testing.T) {
+	paste := strings.Repeat("é", 801)
+	shownAsLabel := IsShownAsLabel(paste)
+	require.True(t, shownAsLabel)
+}
+
+func pasteOfTwoLineBreaksIsNotShownAsLabel(t *testing.T) {
+	shownAsLabel := IsShownAsLabel("one\ntwo\nthree")
+	require.False(t, shownAsLabel)
+}
+
+func pasteOverTwoLineBreaksIsShownAsLabel(t *testing.T) {
+	shownAsLabel := IsShownAsLabel("one\ntwo\nthree\nfour")
+	require.True(t, shownAsLabel)
 }
 
 func pasteLabelCountsLineBreaksAsLines(t *testing.T) {
-	if got := PasteLabel(2, "a\nb\nc\nd"); got != "[Pasted text #2 +3 lines]" {
-		t.Errorf("label of four lines = %q, want %q", got, "[Pasted text #2 +3 lines]")
-	}
-	if got := PasteLabel(1, strings.Repeat("x", 900)); got != "[Pasted text #1]" {
-		t.Errorf("label of one long line = %q, want %q", got, "[Pasted text #1]")
-	}
+	label := PasteLabel(2, "a\nb\nc\nd")
+	require.Equal(t, "[Pasted text #2 +3 lines]", label)
+}
+
+func pasteLabelOfOneLongLineHasNoLineCount(t *testing.T) {
+	longLine := strings.Repeat("x", 900)
+	label := PasteLabel(1, longLine)
+	require.Equal(t, "[Pasted text #1]", label)
 }
 
 func collapsedTextExpandsBackToSameText(t *testing.T) {
 	pastes := []string{"a\nb\nc\nd", "w\nx\ny\nz"}
 	text := "look at a\nb\nc\nd and then w\nx\ny\nz please"
+
 	collapsed := TextWithPastesCollapsed(text, pastes)
-	if want := "look at [Pasted text #1 +3 lines] and then [Pasted text #2 +3 lines] please"; collapsed != want {
-		t.Errorf("collapsed = %q, want %q", collapsed, want)
-	}
-	if expanded := TextWithPastesExpanded(collapsed, pastes); expanded != text {
-		t.Errorf("expanded = %q, want %q", expanded, text)
-	}
+	require.Equal(t, "look at [Pasted text #1 +3 lines] and then [Pasted text #2 +3 lines] please", collapsed)
+
+	expanded := TextWithPastesExpanded(collapsed, pastes)
+	require.Equal(t, text, expanded)
 }
 
 func textPartsFollowLabelsInTextOrderAndLeaveOutPasteWithoutLabel(t *testing.T) {
 	pastes := []string{"a\nb\nc\nd", "w\nx\ny\nz", "deleted\nlabel\nof\nthis"}
 	text := "[Pasted text #2 +3 lines] before [Pasted text #1 +3 lines]"
+
+	parts := TextParts(text, pastes)
 	want := []TextPart{{Text: "w\nx\ny\nz", IsPaste: true, Number: 2}, {Text: " before "},
 		{Text: "a\nb\nc\nd", IsPaste: true, Number: 1}}
-	if got := TextParts(text, pastes); !reflect.DeepEqual(got, want) {
-		t.Errorf("TextParts = %+v, want %+v", got, want)
-	}
+	require.Equal(t, want, parts)
 }
 
 func emptyPasteKeepsItsNumberAndHasNoLabel(t *testing.T) {
 	pastes := []string{"", "w\nx\ny\nz"}
 	text := "typed [Pasted text #1] and w\nx\ny\nz"
+
 	collapsed := TextWithPastesCollapsed(text, pastes)
-	if want := "typed [Pasted text #1] and [Pasted text #2 +3 lines]"; collapsed != want {
-		t.Errorf("collapsed = %q, want %q", collapsed, want)
-	}
+	require.Equal(t, "typed [Pasted text #1] and [Pasted text #2 +3 lines]", collapsed)
+
+	parts := TextParts(collapsed, pastes)
 	want := []TextPart{{Text: "typed [Pasted text #1] and "}, {Text: "w\nx\ny\nz", IsPaste: true, Number: 2}}
-	if got := TextParts(collapsed, pastes); !reflect.DeepEqual(got, want) {
-		t.Errorf("TextParts = %+v, want %+v", got, want)
-	}
+	require.Equal(t, want, parts)
 }

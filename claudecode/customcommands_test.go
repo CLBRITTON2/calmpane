@@ -3,8 +3,9 @@ package claudecode
 import (
 	"os"
 	"path/filepath"
-	"reflect"
 	"testing"
+
+	"github.com/stretchr/testify/require"
 )
 
 func TestCustomSlashCommands(t *testing.T) {
@@ -16,63 +17,60 @@ func TestCustomSlashCommands(t *testing.T) {
 
 func writeTestFile(t *testing.T, path string, content string) {
 	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	dir := filepath.Dir(path)
+	err := os.MkdirAll(dir, 0o755)
+	require.NoError(t, err)
+	err = os.WriteFile(path, []byte(content), 0o600)
+	require.NoError(t, err)
 }
 
 func customSlashCommandsListProjectThenUserThenSyncedWithSourceAndFirstOfName(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
 	project := t.TempDir()
-	writeTestFile(t, filepath.Join(project, ".claude", "commands", "deploy.md"),
-		"---\r\ndescription: Deploy the\r\n  staging site\r\n---\r\nDeploy it.\r\n")
-	writeTestFile(t, filepath.Join(home, ".claude", "commands", "deploy.md"), "---\ndescription: Deploy anywhere\n---\n")
-	writeTestFile(t, filepath.Join(home, ".claude", "commands", "notes.txt"), "not a command")
-	writeTestFile(t, filepath.Join(home, ".claude", "skills", "tidy", "SKILL.md"),
-		"---\nname: tidy\ndescription: Tidy the imports\n---\nBody.\n")
-	writeTestFile(t, filepath.Join(home, ".claude", "skills", "bare", "SKILL.md"), "No frontmatter.\n")
-	writeTestFile(t, filepath.Join(home, ".claude", "skills", "synced", "account", "manifest.json"),
+	projectDeployPath := filepath.Join(project, ".claude", "commands", "deploy.md")
+	writeTestFile(t, projectDeployPath, "---\r\ndescription: Deploy the\r\n  staging site\r\n---\r\nDeploy it.\r\n")
+	userDeployPath := filepath.Join(home, ".claude", "commands", "deploy.md")
+	writeTestFile(t, userDeployPath, "---\ndescription: Deploy anywhere\n---\n")
+	notesPath := filepath.Join(home, ".claude", "commands", "notes.txt")
+	writeTestFile(t, notesPath, "not a command")
+	tidySkillPath := filepath.Join(home, ".claude", "skills", "tidy", "SKILL.md")
+	writeTestFile(t, tidySkillPath, "---\nname: tidy\ndescription: Tidy the imports\n---\nBody.\n")
+	bareSkillPath := filepath.Join(home, ".claude", "skills", "bare", "SKILL.md")
+	writeTestFile(t, bareSkillPath, "No frontmatter.\n")
+	manifestPath := filepath.Join(home, ".claude", "skills", "synced", "account", "manifest.json")
+	writeTestFile(t, manifestPath,
 		`{"skills":[{"name":"pdf","description":"Read PDFs"},{"name":"tidy","description":"Synced tidy"}]}`)
+
 	commands, err := CustomSlashCommands(project)
-	if err != nil {
-		t.Fatalf("CustomSlashCommands: %v", err)
-	}
+	require.NoError(t, err)
 	want := []SlashCommand{
 		{Name: "deploy", Description: "Deploy the staging site (project)"},
 		{Name: "bare", Description: "(user)"},
 		{Name: "tidy", Description: "Tidy the imports (user)"},
 		{Name: "pdf", Description: "Read PDFs (claude.ai sync)"},
 	}
-	if !reflect.DeepEqual(commands, want) {
-		t.Errorf("commands = %+v, want %+v", commands, want)
-	}
+	require.Equal(t, want, commands)
 }
 
 func customSlashCommandsLeaveOutSkillNotUserInvocable(t *testing.T) {
 	home := t.TempDir()
 	t.Setenv("USERPROFILE", home)
-	writeTestFile(t, filepath.Join(home, ".claude", "skills", "hidden", "SKILL.md"),
-		"---\ndescription: Only Claude runs this\nuser-invocable: false\n---\n")
-	commands, err := CustomSlashCommands(t.TempDir())
-	if err != nil {
-		t.Fatalf("CustomSlashCommands: %v", err)
-	}
-	if len(commands) != 0 {
-		t.Errorf("commands = %+v, want none", commands)
-	}
+	hiddenSkillPath := filepath.Join(home, ".claude", "skills", "hidden", "SKILL.md")
+	writeTestFile(t, hiddenSkillPath, "---\ndescription: Only Claude runs this\nuser-invocable: false\n---\n")
+	project := t.TempDir()
+
+	commands, err := CustomSlashCommands(project)
+	require.NoError(t, err)
+	require.Empty(t, commands)
 }
 
 func customSlashCommandsAreEmptyWithoutClaudeFolders(t *testing.T) {
-	t.Setenv("USERPROFILE", t.TempDir())
-	commands, err := CustomSlashCommands(t.TempDir())
-	if err != nil {
-		t.Fatalf("CustomSlashCommands: %v", err)
-	}
-	if len(commands) != 0 {
-		t.Errorf("commands = %+v, want none", commands)
-	}
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	project := t.TempDir()
+
+	commands, err := CustomSlashCommands(project)
+	require.NoError(t, err)
+	require.Empty(t, commands)
 }

@@ -1,12 +1,12 @@
 package ui
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/calmpane/claudecode"
 	"github.com/CLBRITTON2/calmpane/internal/config"
@@ -26,22 +26,19 @@ var testAppearance = func() appearance {
 
 func exampleSettings(t *testing.T) config.Config {
 	settings, err := config.Example()
-	if err != nil {
-		t.Fatalf("Example: %v", err)
-	}
+	require.NoError(t, err)
 	return settings
 }
 
 func appearanceFrom(t *testing.T, settings config.Config) appearance {
 	drawn, err := newAppearance(settings)
-	if err != nil {
-		t.Fatalf("newAppearance: %v", err)
-	}
+	require.NoError(t, err)
 	return drawn
 }
 
 func TestEntryRows(t *testing.T) {
-	t.Run("promptBandRowsFillWidthWhenPromptWraps", promptBandRowsFillWidthWhenPromptWraps)
+	t.Run("promptBandRowsFillWidthWhenPromptWrapsAtForty", promptBandRowsFillWidthWhenPromptWrapsAtForty)
+	t.Run("promptBandRowsFillWidthWhenPromptWrapsAtHundred", promptBandRowsFillWidthWhenPromptWrapsAtHundred)
 	t.Run("oneLinePromptIsOneBandRowWithBlankRowBeforeReply", oneLinePromptIsOneBandRowWithBlankRowBeforeReply)
 	t.Run("wrappedPromptHasMarkerOnFirstBandRowOnly", wrappedPromptHasMarkerOnFirstBandRowOnly)
 	t.Run("queuedPromptIsUnqueuedBandThenMutedNoteRowWithoutOverlay", queuedPromptIsUnqueuedBandThenMutedNoteRowWithoutOverlay)
@@ -58,40 +55,40 @@ func promptRowsShowEachPasteAsItsLabel(t *testing.T) {
 	entry := claudecode.DialogueEntry{Kind: claudecode.PromptEntry, Text: "l1\nl2\nl3\nl4\n\nwhy did it fail",
 		Pastes: []string{"l1\nl2\nl3\nl4"}}
 	rows, err := EntryRows(entry, nil, 60, nil, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
+	require.NoError(t, err)
+	plain := plainRows(rows)
 	want := []string{"", " > [Pasted text #1 +3 lines]", "", "   why did it fail"}
-	if got := plainRows(rows); !reflect.DeepEqual(got, want) {
-		t.Errorf("prompt rows = %q, want %q", got, want)
-	}
+	require.Equal(t, want, plain)
 }
 
 func compactSummaryIsOneRow(t *testing.T) {
-	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.CompactSummaryEntry}, nil, 60, nil, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
+	entry := claudecode.DialogueEntry{Kind: claudecode.CompactSummaryEntry}
+	rows, err := EntryRows(entry, nil, 60, nil, testAppearance)
+	require.NoError(t, err)
+	plain := plainRows(rows)
 	want := []string{"", " Conversation compacted"}
-	if got := plainRows(rows); !reflect.DeepEqual(got, want) {
-		t.Errorf("compact summary rows = %q, want %q", got, want)
+	require.Equal(t, want, plain)
+}
+
+func assertPromptBandRowsFillWidthWhenPromptWraps(t *testing.T, width int) {
+	t.Helper()
+	prompt := "make the card, name it with zen, and check that every row of the band reaches the right edge\n" +
+		"second line\twith a tab"
+	rows := PromptBandRows(prompt, width, testAppearance)
+	rowCount := len(rows)
+	require.GreaterOrEqual(t, rowCount, 2)
+	for _, row := range rows {
+		rowWidth := lipgloss.Width(row)
+		require.Equal(t, width, rowWidth, row)
 	}
 }
 
-func promptBandRowsFillWidthWhenPromptWraps(t *testing.T) {
-	prompt := "make the card, name it with zen, and check that every row of the band reaches the right edge\n" +
-		"second line\twith a tab"
-	for _, width := range []int{40, 100} {
-		rows := PromptBandRows(prompt, width, testAppearance)
-		if len(rows) < 2 {
-			t.Fatalf("width %d: %d rows, want a row for each line of the prompt", width, len(rows))
-		}
-		for index, row := range rows {
-			if rowWidth := lipgloss.Width(row); rowWidth != width {
-				t.Errorf("width %d: row %d is %d columns wide: %q", width, index, rowWidth, row)
-			}
-		}
-	}
+func promptBandRowsFillWidthWhenPromptWrapsAtForty(t *testing.T) {
+	assertPromptBandRowsFillWidthWhenPromptWraps(t, 40)
+}
+
+func promptBandRowsFillWidthWhenPromptWrapsAtHundred(t *testing.T) {
+	assertPromptBandRowsFillWidthWhenPromptWraps(t, 100)
 }
 
 func plainRows(rows []string) []string {
@@ -104,83 +101,66 @@ func plainRows(rows []string) []string {
 
 func oneLinePromptIsOneBandRowWithBlankRowBeforeReply(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(testAppearance, 40)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
-	}
-	promptRows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.PromptEntry, Text: "ok"},
-		nil, 40, replyRenderer, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows of the prompt: %v", err)
-	}
-	replyRows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Done."},
-		nil, 40, replyRenderer, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows of the reply: %v", err)
-	}
-	got := plainRows(append(promptRows, replyRows...))
+	require.NoError(t, err)
+	prompt := claudecode.DialogueEntry{Kind: claudecode.PromptEntry, Text: "ok"}
+	promptRows, err := EntryRows(prompt, nil, 40, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	reply := claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Done."}
+	replyRows, err := EntryRows(reply, nil, 40, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	rows := append(promptRows, replyRows...)
+	plain := plainRows(rows)
 	want := []string{"", " > ok", "", " Done."}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("rows = %q, want %q", got, want)
-	}
+	require.Equal(t, want, plain)
 }
 
 func wrappedPromptHasMarkerOnFirstBandRowOnly(t *testing.T) {
-	got := plainRows(PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", 30, testAppearance))
+	rows := PromptBandRows("rename the widget and then rebuild the whole view\nsecond\nthird", 30, testAppearance)
+	plain := plainRows(rows)
 	want := []string{" > rename the widget and then", "   rebuild the whole view", "   second", "   third"}
-	if !reflect.DeepEqual(got, want) {
-		t.Errorf("band rows = %q, want %q", got, want)
-	}
+	require.Equal(t, want, plain)
 }
 
 func queuedPromptIsUnqueuedBandThenMutedNoteRowWithoutOverlay(t *testing.T) {
 	prompt := "rename the widget and then rebuild the whole view"
 	unqueued := PromptEntryRows(prompt, "", 30, testAppearance)
+	unqueuedPlain := plainRows(unqueued)
 	wantUnqueued := []string{"", " > rename the widget and then", "   rebuild the whole view"}
-	if got := plainRows(unqueued); !reflect.DeepEqual(got, wantUnqueued) {
-		t.Errorf("unqueued rows = %q, want %q with no note row", got, wantUnqueued)
-	}
+	require.Equal(t, wantUnqueued, unqueuedPlain)
 	queued := PromptEntryRows(prompt, queuedNote, 30, testAppearance)
-	if !reflect.DeepEqual(queued[:len(queued)-1], unqueued) {
-		t.Errorf("queued band rows = %q, want the unqueued rows %q", queued[:len(queued)-1], unqueued)
-	}
+	queuedBand := queued[:len(queued)-1]
+	require.Equal(t, unqueued, queuedBand)
 	noteRow := queued[len(queued)-1]
+	notePlain := ansi.Strip(noteRow)
+	require.Equal(t, "   "+queuedNote, notePlain)
 	mutedForeground := "38;2;110;106;134"
+	require.Contains(t, noteRow, mutedForeground)
 	overlayBackground := "48;2;38;35;58"
-	if ansi.Strip(noteRow) != "   "+queuedNote || !strings.Contains(noteRow, mutedForeground) ||
-		strings.Contains(noteRow, overlayBackground) {
-		t.Errorf("note row = %q, want %q in muted with no overlay", noteRow, "   "+queuedNote)
-	}
+	require.NotContains(t, noteRow, overlayBackground)
 }
 
 func replyRowsDropHeadingAndCodeMarkers(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(testAppearance, 60)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
-	}
-	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "## Plan\n\nRun `go test` now."}, nil, 60,
-		replyRenderer, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
-	plain := ansi.Strip(strings.Join(rows, "\n"))
-	if strings.ContainsAny(plain, "#`") || !strings.Contains(plain, "Plan") || !strings.Contains(plain, "go test") {
-		t.Errorf("reply rows = %q, want Plan and go test without # or backticks", plain)
-	}
+	require.NoError(t, err)
+	reply := claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "## Plan\n\nRun `go test` now."}
+	rows, err := EntryRows(reply, nil, 60, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	joined := strings.Join(rows, "\n")
+	plain := ansi.Strip(joined)
+	require.NotContains(t, plain, "#")
+	require.NotContains(t, plain, "`")
+	require.Contains(t, plain, "Plan")
+	require.Contains(t, plain, "go test")
 }
 
 func replyRowsDrawInlineCodeWithoutBackground(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(testAppearance, 60)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
-	}
-	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run `go test` now."},
-		nil, 60, replyRenderer, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
-	if joined := strings.Join(rows, "\n"); strings.Contains(joined, "48;") {
-		t.Errorf("reply rows = %q, want no background color", joined)
-	}
+	require.NoError(t, err)
+	reply := claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run `go test` now."}
+	rows, err := EntryRows(reply, nil, 60, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	joined := strings.Join(rows, "\n")
+	require.NotContains(t, joined, "48;")
 }
 
 func replyRowsDrawStrongTextBoldInStrongColor(t *testing.T) {
@@ -188,46 +168,33 @@ func replyRowsDrawStrongTextBoldInStrongColor(t *testing.T) {
 	settings.Colors.Strong = "#eb6f92"
 	drawn := appearanceFrom(t, settings)
 	replyRenderer, err := NewReplyRenderer(drawn, 60)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
-	}
-	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run it **now** please."},
-		nil, 60, replyRenderer, drawn)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
+	require.NoError(t, err)
+	reply := claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run it **now** please."}
+	rows, err := EntryRows(reply, nil, 60, replyRenderer, drawn)
+	require.NoError(t, err)
 	// love #eb6f92 as a 24-bit foreground, then bold
 	boldLove := "\x1b[38;2;235;111;146;1m"
-	if joined := strings.Join(rows, "\n"); !strings.Contains(joined, boldLove+"now") {
-		t.Errorf("reply rows = %q, want now in bold love %q", joined, boldLove)
-	}
+	joined := strings.Join(rows, "\n")
+	require.Contains(t, joined, boldLove+"now")
 }
 
 func questionRowsNumberOptionsFromOne(t *testing.T) {
 	entry := claudecode.DialogueEntry{Kind: claudecode.QuestionEntry, Text: "Which color?", Options: []string{"Red (Recommended)", "Blue"}}
 	rows, err := EntryRows(entry, nil, 60, nil, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
+	require.NoError(t, err)
 	plain := plainRows(rows)
 	want := []string{"", " Which color?", "   1. Red (Recommended)", "   2. Blue"}
-	if !reflect.DeepEqual(plain, want) {
-		t.Errorf("question rows = %q, want %q", plain, want)
-	}
+	require.Equal(t, want, plain)
 }
 
 func replyRowsIndentTabIndentedCodeWithSpaces(t *testing.T) {
 	replyRenderer, err := NewReplyRenderer(testAppearance, 60)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
-	}
-	rows, err := EntryRows(claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run:\n\n    func f() {\n    \treturn\n    }"}, nil, 60,
-		replyRenderer, testAppearance)
-	if err != nil {
-		t.Fatalf("EntryRows: %v", err)
-	}
-	plain := ansi.Strip(strings.Join(rows, "\n"))
-	if strings.Contains(plain, "\t") || !strings.Contains(plain, "    return") {
-		t.Errorf("reply rows = %q, want return indented by spaces", plain)
-	}
+	require.NoError(t, err)
+	reply := claudecode.DialogueEntry{Kind: claudecode.ReplyEntry, Text: "Run:\n\n    func f() {\n    \treturn\n    }"}
+	rows, err := EntryRows(reply, nil, 60, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	joined := strings.Join(rows, "\n")
+	plain := ansi.Strip(joined)
+	require.NotContains(t, plain, "\t")
+	require.Contains(t, plain, "    return")
 }

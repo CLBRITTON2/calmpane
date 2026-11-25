@@ -43,11 +43,15 @@ type entriesReadMsg struct {
 	turn            claudecode.CurrentTurn
 }
 
+type subagentsReadMsg struct {
+	subagents []claudecode.SubagentActivity
+}
+
 type agentStatusMsg struct {
 	status AgentStatus
 }
 
-// agentInputBoxMsg reports that the agent's input box came or went while it works.
+// agentInputBoxMsg reports that the agent's input box came or went while it is not blocked.
 type agentInputBoxMsg struct {
 	shown bool
 }
@@ -158,6 +162,7 @@ type zenModel struct {
 	// interrupting is set by an Esc sent to a working Claude, until Claude stops working.
 	interrupting bool
 	turn         claudecode.CurrentTurn
+	subagents    []claudecode.SubagentActivity
 	now          time.Time
 	clockTicking bool
 	// endedTurnRow reports the turn this view saw end, until Claude works or blocks again.
@@ -194,8 +199,8 @@ type zenModel struct {
 	slashMenu *slashMenu
 	// agentPickerShown is set while the agent shows a picker or dialog in place of its input box after a slash command.
 	agentPickerShown bool
-	// agentInputBoxGone is set while the agent works with no input box, as when a dialog herdr does not report as
-	// blocked waits for the user.
+	// agentInputBoxGone is set while the agent is not reported as blocked and has no input box, as when a dialog herdr
+	// does not report as blocked waits for the user.
 	agentInputBoxGone bool
 }
 
@@ -251,13 +256,15 @@ func RunZenView(agent Agent, settings config.Config, draft Draft, draftErr error
 }
 
 // followAgentSession sends the dialogue, status and status line of the session the agent reports, and of each session
-// it switches to after, until a failure it sends as fatal. An empty statusLineDir sends no status line.
+// it switches to after, until a failure it sends as fatal or the agent exits, sent as AgentGone. An agent gone before it
+// reports a session is a failure. An empty statusLineDir sends no status line.
 func followAgentSession(agent Agent, statusLineDir string, send func(tea.Msg)) {
 	sessionID, err := agent.WaitForSessionID()
 	if err != nil {
 		send(fatalMsg{err: err})
 		return
 	}
+	go pollAgentStatus(agent, send)
 	conversationSessionIDs := make(chan string)
 	if statusLineDir == "" {
 		go func() {
@@ -272,15 +279,19 @@ func followAgentSession(agent Agent, statusLineDir string, send func(tea.Msg)) {
 		send(fatalMsg{err: err})
 		return
 	}
-	go pollAgentStatus(agent, send)
 	for {
-		nextSessionID, err := followTranscript(transcript, sessionID, agent.WaitForSessionID, send)
-		if err != nil {
-			send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), err), transcript.Close())})
+		nextSessionID, followErr := followTranscript(transcript, sessionID, agent.WaitForSessionID, send)
+		closeErr := transcript.Close()
+		if errors.Is(followErr, ErrAgentGone) && closeErr == nil {
+			send(agentStatusMsg{status: AgentGone})
 			return
 		}
-		if err := transcript.Close(); err != nil {
-			send(fatalMsg{err: fmt.Errorf("Cannot close %s: %w", transcript.Name(), err)})
+		if followErr != nil {
+			send(fatalMsg{err: errors.Join(fmt.Errorf("Cannot read %s: %w", transcript.Name(), followErr), closeErr)})
+			return
+		}
+		if closeErr != nil {
+			send(fatalMsg{err: fmt.Errorf("Cannot close %s: %w", transcript.Name(), closeErr)})
 			return
 		}
 		sessionID = nextSessionID
@@ -297,18 +308,18 @@ func followAgentSession(agent Agent, statusLineDir string, send func(tea.Msg)) {
 const sessionCheckInterval = time.Second
 
 // followTranscript sends the tail's entries in one message once it reaches the end of the file, then each new
-// line's entries as they are written, until reportedSessionID gives a session other than sessionID, which it returns.
+// line's entries as they are written, and the running subagents whenever they change, until reportedSessionID gives a
+// session other than sessionID, which it returns.
 func followTranscript(transcript *os.File, sessionID string, reportedSessionID func() (string, error),
-	send func(tea.Msg)) (string, error) {
-	info, err := transcript.Stat()
+	send func(tea.Msg)) (nextSessionID string, err error) {
+	subagentFollower := claudecode.NewSubagentFollower(transcript.Name())
+	defer func() {
+		if closeErr := subagentFollower.Close(); closeErr != nil {
+			err = errors.Join(err, closeErr)
+		}
+	}()
+	start, err := claudecode.SeekToTail(transcript)
 	if err != nil {
-		return "", err
-	}
-	start, err := claudecode.TailStart(transcript, info.Size(), 2*1024*1024)
-	if err != nil {
-		return "", err
-	}
-	if _, err := transcript.Seek(start, io.SeekStart); err != nil {
 		return "", err
 	}
 	sessionChecked := time.Now()
@@ -318,6 +329,9 @@ func followTranscript(transcript *os.File, sessionID string, reportedSessionID f
 	unsentQueueOperations := []placedQueueOperation{}
 	turn := claudecode.CurrentTurn{}
 	turnChanged := false
+	runningSubagents := []claudecode.RunningSubagent{}
+	sentSubagents := []claudecode.SubagentActivity{}
+	sentSubagentsProblem := ""
 	linesRead := 0
 	for {
 		line, err := reader.ReadBytes('\n')
@@ -329,6 +343,20 @@ func followTranscript(transcript *os.File, sessionID string, reportedSessionID f
 				unsentQueueOperations = []placedQueueOperation{}
 				turnChanged = false
 			}
+			subagents, subagentsErr := subagentFollower.Activities(runningSubagents)
+			if !slices.Equal(subagents, sentSubagents) {
+				sentSubagents = subagents
+				send(subagentsReadMsg{subagents: subagents})
+			}
+			subagentsProblem := ""
+			if subagentsErr != nil {
+				subagentsProblem = subagentsErr.Error()
+			}
+			// a problem that lasts is sent once, not on every poll
+			if subagentsProblem != "" && subagentsProblem != sentSubagentsProblem {
+				send(problemMsg{err: subagentsErr})
+			}
+			sentSubagentsProblem = subagentsProblem
 			if time.Since(sessionChecked) >= sessionCheckInterval {
 				sessionChecked = time.Now()
 				reported, err := reportedSessionID()
@@ -357,6 +385,10 @@ func followTranscript(transcript *os.File, sessionID string, reportedSessionID f
 		if err == nil {
 			lineTurn, err = claudecode.TurnAfterLine(turn, line, lineEntries)
 		}
+		lineRunningSubagents := runningSubagents
+		if err == nil {
+			lineRunningSubagents, err = claudecode.RunningSubagentsAfterLine(runningSubagents, line)
+		}
 		if err != nil {
 			startLine, countErr := LineNumberAt(transcript, start)
 			if countErr != nil {
@@ -373,6 +405,7 @@ func followTranscript(transcript *os.File, sessionID string, reportedSessionID f
 		unsentEntries = append(unsentEntries, lineEntries...)
 		turnChanged = turnChanged || lineTurn != turn
 		turn = lineTurn
+		runningSubagents = lineRunningSubagents
 	}
 }
 
@@ -394,8 +427,9 @@ func LineNumberAt(file io.ReaderAt, offset int64) (int, error) {
 	}
 }
 
-// pollAgentStatus keeps polling after a failure, since the view keeps running. While the agent works it also polls
-// for the input box, since a dialog in place of the box can leave the agent reported as working.
+// pollAgentStatus keeps polling after a failure, since the view keeps running, and stops once the agent is gone. Unless
+// the agent is blocked it also polls for the input box, since a dialog in place of the box can leave the agent reported
+// as working or idle.
 func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 	lastStatus := AgentUnknown
 	lastInputBoxShown := true
@@ -407,8 +441,11 @@ func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 			lastStatus = agentStatus
 			send(agentStatusMsg{status: agentStatus})
 		}
+		if lastStatus == AgentGone {
+			return
+		}
 		inputBoxShown := true
-		if lastStatus == AgentWorking {
+		if lastStatus != AgentBlocked {
 			inputBoxShown, err = agent.InputBoxShown()
 			if err != nil {
 				send(problemMsg{err: err})
@@ -423,14 +460,17 @@ func pollAgentStatus(agent Agent, send func(tea.Msg)) {
 	}
 }
 
-func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.Time, width int, appearance appearance,
-	claudeScreenKey string) string {
+func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, subagents []claudecode.SubagentActivity,
+	now time.Time, width int, appearance appearance, claudeScreenKey string) string {
 	switch agentStatus {
 	case AgentBlocked:
 		// wrapped, since the key to press comes last; each row keeps the one column of left margin
 		waiting := "Waiting for you in Claude. Press " + claudeScreenKey + " to answer."
 		return appearance.waitingStyle.Render(ansi.Wrap(waiting, max(width-1, 1), ""))
 	case AgentWorking:
+		if len(subagents) > 0 {
+			return subagentRow(subagents, now, width, appearance)
+		}
 		activity := turn.ToolCallActivity
 		if activity == "" {
 			activity = "Working..."
@@ -445,6 +485,24 @@ func statusLine(agentStatus AgentStatus, turn claudecode.CurrentTurn, now time.T
 	default:
 		return ""
 	}
+}
+
+// subagentRow cuts the newest subagent's description and tool call to keep the count of the others and its time
+// visible.
+func subagentRow(subagents []claudecode.SubagentActivity, now time.Time, width int, appearance appearance) string {
+	newest := subagents[0]
+	activity := newest.Description
+	if newest.ToolCallActivity != "" {
+		activity += ": " + newest.ToolCallActivity
+	}
+	suffix := ""
+	if len(subagents) > 1 {
+		suffix = fmt.Sprintf(" +%d more", len(subagents)-1)
+	}
+	suffix += " · " + TurnDuration(max(now.Sub(newest.StartTime), 0))
+	// the row's left margin takes one column
+	activityWidth := max(width-1-ansi.StringWidth(suffix), 0)
+	return appearance.workingStyle.Render(ansi.Truncate(activity, activityWidth, "") + suffix)
 }
 
 func TurnDuration(elapsed time.Duration) string {
@@ -479,6 +537,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case entriesReadMsg:
 		m.turn = msg.turn
 		return m.withEntries(msg.entries, msg.queueOperations), nil
+	case subagentsReadMsg:
+		m.subagents = msg.subagents
+		return m.withVisibleRowsDrawn(), nil
 	case claudeKeysSentMsg:
 		if msg.err != nil {
 			m.status = m.appearance.errorStyle.Render(msg.err.Error())
@@ -487,6 +548,9 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 	case agentStatusMsg:
+		if msg.status == AgentGone {
+			return m, tea.Quit
+		}
 		turnEnded := m.agentStatus == AgentWorking && (msg.status == AgentIdle || msg.status == AgentDone)
 		m.agentStatus = msg.status
 		m.status = ""
@@ -551,6 +615,7 @@ func (m zenModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.earlyPrompts = nil
 		m.rowsBelowView = 0
 		m.turn = claudecode.CurrentTurn{}
+		m.subagents = nil
 		m.endedTurnRow = ""
 		m.endedTurnPromptTime = time.Time{}
 		return m.withVisibleRowsDrawn(), nil
@@ -1268,9 +1333,9 @@ func (m zenModel) shownStatus() string {
 	if m.copyStatus != "" {
 		return m.copyStatus
 	}
-	waitingOnDialogReportedAsWorking := m.agentStatus == AgentWorking && m.agentInputBoxGone
-	if m.agentPickerShown || waitingOnDialogReportedAsWorking {
-		return statusLine(AgentBlocked, m.turn, m.now, m.width, m.appearance, m.claudeScreenKey)
+	waitingOnDialogNotReportedAsBlocked := m.agentStatus != AgentBlocked && m.agentInputBoxGone
+	if m.agentPickerShown || waitingOnDialogNotReportedAsBlocked {
+		return statusLine(AgentBlocked, m.turn, m.subagents, m.now, m.width, m.appearance, m.claudeScreenKey)
 	}
 	if m.draftStatus != "" {
 		return m.draftStatus
@@ -1281,7 +1346,7 @@ func (m zenModel) shownStatus() string {
 	if m.endedTurnRow != "" {
 		return m.appearance.doneStyle.Render(m.endedTurnRow)
 	}
-	return statusLine(m.agentStatus, m.turn, m.now, m.width, m.appearance, m.claudeScreenKey)
+	return statusLine(m.agentStatus, m.turn, m.subagents, m.now, m.width, m.appearance, m.claudeScreenKey)
 }
 
 // rowsBelowInput are the open slash menu's rows, or Claude's status line, under the separator that closes the input.

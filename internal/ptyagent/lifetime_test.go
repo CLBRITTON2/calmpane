@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/stretchr/testify/require"
 	"golang.org/x/sys/windows"
 )
 
@@ -80,9 +81,8 @@ func childInZensJobEndsWhenZenExits(t *testing.T) {
 }
 
 func parentExitReportsWhenParentExits(t *testing.T) {
-	if exitCode := childExitCodeOnceZenEnds(t, zenOutOfJob, childWaitsForParent); exitCode != 0 {
-		t.Errorf("child exit code = %d, want 0 from parentExit reporting zen's exit with no error", exitCode)
-	}
+	exitCode := childExitCodeOnceZenEnds(t, zenOutOfJob, childWaitsForParent)
+	require.Zero(t, exitCode, "parentExit reports zen's exit with no error")
 }
 
 // childExitCodeOnceZenEnds fails the test when the child of a fake zen still runs 10s after the fake zen exits.
@@ -91,53 +91,37 @@ func childExitCodeOnceZenEnds(t *testing.T, zenMode string, childMode string) ui
 	zen.Stderr = os.Stderr
 	zen.Env = append(os.Environ(), fakeZenEnv+"="+zenMode, fakeZenChildEnv+"="+childMode)
 	zenStdin, err := zen.StdinPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
 	zenStdout, err := zen.StdoutPipe()
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := zen.Start(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	startErr := zen.Start()
+	require.NoError(t, startErr)
 	childPIDLine, err := bufio.NewReader(zenStdout).ReadString('\n')
-	if err != nil {
-		t.Fatal(err)
-	}
-	childPID, err := strconv.ParseUint(strings.TrimSpace(childPIDLine), 10, 32)
-	if err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	childPIDText := strings.TrimSpace(childPIDLine)
+	childPID, err := strconv.ParseUint(childPIDText, 10, 32)
+	require.NoError(t, err)
 	child, err := windows.OpenProcess(windows.SYNCHRONIZE|windows.PROCESS_TERMINATE|windows.PROCESS_QUERY_LIMITED_INFORMATION, false,
 		uint32(childPID))
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer func() {
-		if err := windows.CloseHandle(child); err != nil {
-			t.Error(err)
-		}
-	}()
-	if err := zenStdin.Close(); err != nil {
-		t.Fatal(err)
-	}
-	if err := zen.Wait(); err != nil {
-		t.Fatal(err)
-	}
+	require.NoError(t, err)
+	t.Cleanup(func() {
+		closeErr := windows.CloseHandle(child)
+		require.NoError(t, closeErr)
+	})
+	closeStdinErr := zenStdin.Close()
+	require.NoError(t, closeStdinErr)
+	zenErr := zen.Wait()
+	require.NoError(t, zenErr)
 	waitResult, err := windows.WaitForSingleObject(child, 10_000)
-	if err != nil {
-		t.Fatal(err)
+	require.NoError(t, err)
+	childExited := waitResult == windows.WAIT_OBJECT_0
+	if !childExited {
+		terminateErr := windows.TerminateProcess(child, 1)
+		require.NoError(t, terminateErr)
 	}
-	if waitResult != windows.WAIT_OBJECT_0 {
-		if err := windows.TerminateProcess(child, 1); err != nil {
-			t.Error(err)
-		}
-		t.Fatalf("child %d still runs 10s after its parent exited", childPID)
-	}
+	require.True(t, childExited, "child %d still runs 10s after its parent exited", childPID)
 	var exitCode uint32
-	if err := windows.GetExitCodeProcess(child, &exitCode); err != nil {
-		t.Fatal(err)
-	}
+	exitCodeErr := windows.GetExitCodeProcess(child, &exitCode)
+	require.NoError(t, exitCodeErr)
 	return exitCode
 }

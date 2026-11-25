@@ -1,0 +1,4 @@
+{"type":"user","isSidechain":true,"agentId":"a2","timestamp":"2026-11-25T10:00:06.100Z","message":{"role":"user","content":"Run the tests"}}
+{"type":"assistant","isSidechain":true,"agentId":"a2","timestamp":"2026-11-25T10:00:08.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a2read","name":"Read","input":{"file_path":"C:\\work\\go.mod"}}]}}
+{"type":"user","isSidechain":true,"agentId":"a2","timestamp":"2026-11-25T10:00:08.500Z","message":{"role":"user","content":[{"tool_use_id":"toolu_a2read","type":"tool_result","content":"module x"}]}}
+{"type":"assistant","isSidechain":true,"agentId":"a2","timestamp":"2026-11-25T10:00:09.000Z","message":{"role":"assistant","content":[{"type":"text","text":"Running them."},{"type":"tool_use","id":"toolu_a2bash","name":"Bash","input":{"command":"go test ./...","description":"Running go test"}}]}}

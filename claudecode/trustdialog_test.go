@@ -4,26 +4,29 @@ import (
 	"testing"
 
 	"github.com/CLBRITTON2/calmpane/internal/herdr/herdrtest"
+	"github.com/stretchr/testify/require"
 )
 
 func TestTrustDialog(t *testing.T) {
-	t.Run("trustDialogShownOnlyWhileScreenShowsTrustDialog", trustDialogShownOnlyWhileScreenShowsTrustDialog)
+	t.Run("trustDialogShownWhileScreenShowsTrustDialog", trustDialogShownWhileScreenShowsTrustDialog)
+	t.Run("trustDialogNotShownForEmptyInputBox", trustDialogNotShownForEmptyInputBox)
+	t.Run("trustDialogNotShownForInputBoxHoldingDraft", trustDialogNotShownForInputBoxHoldingDraft)
 }
 
-func trustDialogShownOnlyWhileScreenShowsTrustDialog(t *testing.T) {
-	cases := []struct {
-		capture string
-		want    bool
-	}{
-		{capture: "claude-trust-dialog.ansi", want: true},
-		{capture: "claude-input-empty.ansi", want: false},
-		{capture: "claude-input-one-row.ansi", want: false},
-	}
-	for _, testCase := range cases {
-		t.Run(testCase.capture, func(t *testing.T) {
-			if got := TrustDialogShown(herdrtest.CapturedScreen(t, testCase.capture)); got != testCase.want {
-				t.Errorf("TrustDialogShown = %t, want %t", got, testCase.want)
-			}
-		})
-	}
+func trustDialogShownWhileScreenShowsTrustDialog(t *testing.T) {
+	screen := herdrtest.CapturedScreen(t, "claude-trust-dialog.ansi")
+	shown := TrustDialogShown(screen)
+	require.True(t, shown)
+}
+
+func trustDialogNotShownForEmptyInputBox(t *testing.T) {
+	screen := herdrtest.CapturedScreen(t, "claude-input-empty.ansi")
+	shown := TrustDialogShown(screen)
+	require.False(t, shown)
+}
+
+func trustDialogNotShownForInputBoxHoldingDraft(t *testing.T) {
+	screen := herdrtest.CapturedScreen(t, "claude-input-one-row.ansi")
+	shown := TrustDialogShown(screen)
+	require.False(t, shown)
 }

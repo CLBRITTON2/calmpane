@@ -1,0 +1,2 @@
+{"type":"user","isSidechain":true,"agentId":"a1","timestamp":"2026-11-25T10:00:05.100Z","message":{"role":"user","content":"Review the diff"}}
+{"type":"assistant","isSidechain":true,"agentId":"a1","timestamp":"2026-11-25T10:00:10.000Z","message":{"role":"assistant","content":[{"type":"tool_use","id":"toolu_a1read","name":"Read","input":{"file_path":"C:\\work\\view.go"}}]}}

@@ -1,72 +1,81 @@
 package ui
 
 import (
-	"reflect"
 	"strings"
 	"testing"
 
 	"github.com/charmbracelet/x/ansi"
+	"github.com/stretchr/testify/require"
 
 	"github.com/CLBRITTON2/calmpane/internal/config"
 )
 
 func TestCodeBlocks(t *testing.T) {
-	t.Run("replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock", replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock)
+	t.Run("replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtForty",
+		replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtForty)
+	t.Run("replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtHundred",
+		replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtHundred)
 	t.Run("codeFrameRowsWrapLongLineInsideFrame", codeFrameRowsWrapLongLineInsideFrame)
 	t.Run("codeFrameRulesRepeatConfiguredCodeRuleLine", codeFrameRulesRepeatConfiguredCodeRuleLine)
-	t.Run("topRuleDropsHintThenLanguageWhenTooNarrow", topRuleDropsHintThenLanguageWhenTooNarrow)
-	t.Run("topRuleShowsMarkedAfterLanguageOrAloneAndDropsItWhenTooNarrow", topRuleShowsMarkedAfterLanguageOrAloneAndDropsItWhenTooNarrow)
-	t.Run("replyRowsKeepTextAroundCodeBlock", replyRowsKeepTextAroundCodeBlock)
-	t.Run("codeBlocksHoldCodeExactlyAsInReply", codeBlocksHoldCodeExactlyAsInReply)
+	t.Run("topRuleShowsLanguageAndHintWhenWideEnough", topRuleShowsLanguageAndHintWhenWideEnough)
+	t.Run("topRuleDropsHintWhenTooNarrowForIt", topRuleDropsHintWhenTooNarrowForIt)
+	t.Run("topRuleDropsLanguageWhenTooNarrowForIt", topRuleDropsLanguageWhenTooNarrowForIt)
+	t.Run("topRuleShowsMarkedAfterLanguage", topRuleShowsMarkedAfterLanguage)
+	t.Run("topRuleDropsMarkedWhenTooNarrowForIt", topRuleDropsMarkedWhenTooNarrowForIt)
+	t.Run("topRuleShowsMarkedAloneWithoutLanguage", topRuleShowsMarkedAloneWithoutLanguage)
+	t.Run("replyRowsKeepTextAroundCodeBlockInListItem", replyRowsKeepTextAroundCodeBlockInListItem)
+	t.Run("replyRowsKeepTextAroundCodeBlockInQuote", replyRowsKeepTextAroundCodeBlockInQuote)
+	t.Run("replyRowsKeepProseSpellingPlaceholderAsText", replyRowsKeepProseSpellingPlaceholderAsText)
+	t.Run("replyRowsPutHeadingRightOnTopRuleOfCodeBlockUnderIt", replyRowsPutHeadingRightOnTopRuleOfCodeBlockUnderIt)
+	t.Run("codeBlocksKeepTabAndTrailingSpace", codeBlocksKeepTabAndTrailingSpace)
+	t.Run("codeBlocksDropListItemIndent", codeBlocksDropListItemIndent)
+	t.Run("codeBlocksDropQuoteMarker", codeBlocksDropQuoteMarker)
+	t.Run("codeBlocksTakeTildeFenceLeftOpenToReplyEnd", codeBlocksTakeTildeFenceLeftOpenToReplyEnd)
+	t.Run("codeBlocksHoldEachBlockInOrder", codeBlocksHoldEachBlockInOrder)
+	t.Run("codeBlocksSkipEmptyBlock", codeBlocksSkipEmptyBlock)
 	t.Run("codeFrameRowsDrawCommentInBoldIris", codeFrameRowsDrawCommentInBoldIris)
 	t.Run("commentStyleOverridesEveryCommentTypeOfThemeAndEmptyKeepsThemes",
 		commentStyleOverridesEveryCommentTypeOfThemeAndEmptyKeepsThemes)
-	t.Run("codeFrameRowsDrawPickedFrameWithHeavyIrisRulesAndOtherFramesLight", codeFrameRowsDrawPickedFrameWithHeavyIrisRulesAndOtherFramesLight)
+	t.Run("codeFrameRowsDrawPickedFrameWithHeavyIrisRules", codeFrameRowsDrawPickedFrameWithHeavyIrisRules)
+	t.Run("codeFrameRowsDrawOtherFramesWithLightRulesNotInIris", codeFrameRowsDrawOtherFramesWithLightRulesNotInIris)
 }
 
-func codeFrameRowsDrawPickedFrameWithHeavyIrisRulesAndOtherFramesLight(t *testing.T) {
-	// iris #c4a7e7 as a 24-bit foreground
-	iris := "38;2;196;167;231"
-	cases := []struct {
-		frame      codeFrame
-		wantTop    string
-		wantBottom string
-		wantIris   bool
-	}{
-		{frame: codeFrame{picked: true}, wantTop: "┏━ sh ━━━━━━━━━━━━━┓", wantBottom: "┗━━━━━━━━━━━━━━━━━━┛", wantIris: true},
-		{frame: codeFrame{}, wantTop: "╭─ sh ─────────────╮", wantBottom: "╰──────────────────╯", wantIris: false},
-	}
-	for _, testCase := range cases {
-		rows, err := CodeFrameRows(codeBlock{code: "ls", language: "sh"}, testCase.frame, 20, testAppearance)
-		if err != nil {
-			t.Fatalf("CodeFrameRows(%+v): %v", testCase.frame, err)
-		}
-		top, bottom := rows[0], rows[len(rows)-1]
-		if ansi.Strip(top) != testCase.wantTop || ansi.Strip(bottom) != testCase.wantBottom {
-			t.Errorf("rules of %+v = %q and %q, want %q and %q", testCase.frame, ansi.Strip(top), ansi.Strip(bottom),
-				testCase.wantTop, testCase.wantBottom)
-		}
-		if strings.Contains(top, iris) != testCase.wantIris || strings.Contains(bottom, iris) != testCase.wantIris {
-			t.Errorf("rules of %+v = %q and %q, want iris %v", testCase.frame, top, bottom, testCase.wantIris)
-		}
-	}
+// iris #c4a7e7 as a 24-bit foreground
+const irisForeground = "38;2;196;167;231"
+
+func codeFrameRowsDrawPickedFrameWithHeavyIrisRules(t *testing.T) {
+	rows, err := CodeFrameRows(codeBlock{code: "ls", language: "sh"}, codeFrame{picked: true}, 20, testAppearance)
+	require.NoError(t, err)
+	top, bottom := rows[0], rows[len(rows)-1]
+	plainTop := ansi.Strip(top)
+	require.Equal(t, "┏━ sh ━━━━━━━━━━━━━┓", plainTop)
+	plainBottom := ansi.Strip(bottom)
+	require.Equal(t, "┗━━━━━━━━━━━━━━━━━━┛", plainBottom)
+	require.Contains(t, top, irisForeground)
+	require.Contains(t, bottom, irisForeground)
+}
+
+func codeFrameRowsDrawOtherFramesWithLightRulesNotInIris(t *testing.T) {
+	rows, err := CodeFrameRows(codeBlock{code: "ls", language: "sh"}, codeFrame{}, 20, testAppearance)
+	require.NoError(t, err)
+	top, bottom := rows[0], rows[len(rows)-1]
+	plainTop := ansi.Strip(top)
+	require.Equal(t, "╭─ sh ─────────────╮", plainTop)
+	plainBottom := ansi.Strip(bottom)
+	require.Equal(t, "╰──────────────────╯", plainBottom)
+	require.NotContains(t, top, irisForeground)
+	require.NotContains(t, bottom, irisForeground)
 }
 
 func codeFrameRowsDrawCommentInBoldIris(t *testing.T) {
 	block := codeBlock{code: "# 1. Restart zen so it draws the new colors.\ngit status", language: "powershell"}
 	rows, err := CodeFrameRows(block, codeFrame{}, 80, testAppearance)
-	if err != nil {
-		t.Fatalf("CodeFrameRows: %v", err)
-	}
+	require.NoError(t, err)
 	// bold, and iris #c4a7e7 as a 24-bit foreground
 	boldIris := "\x1b[1m\x1b[38;2;196;167;231m"
 	commentRow, commandRow := rows[1], rows[2]
-	if !strings.Contains(commentRow, boldIris) {
-		t.Errorf("comment row = %q, want it in bold iris %q", commentRow, boldIris)
-	}
-	if strings.Contains(commandRow, "38;2;196;167;231") {
-		t.Errorf("command row = %q, want it in another color than the comment's iris", commandRow)
-	}
+	require.Contains(t, commentRow, boldIris)
+	require.NotContains(t, commandRow, irisForeground)
 }
 
 func commentStyleOverridesEveryCommentTypeOfThemeAndEmptyKeepsThemes(t *testing.T) {
@@ -75,222 +84,229 @@ func commentStyleOverridesEveryCommentTypeOfThemeAndEmptyKeepsThemes(t *testing.
 	draculaComment := "38;2;98;114;164"
 	settings := exampleSettings(t)
 	settings.Code = config.Code{Theme: "dracula", Comment: "bold #c4a7e7"}
-	rows, err := CodeFrameRows(block, codeFrame{}, 80, appearanceFrom(t, settings))
-	if err != nil {
-		t.Fatalf("CodeFrameRows: %v", err)
-	}
-	if !strings.Contains(rows[1], boldIris) {
-		t.Errorf("dracula comment row with comment %q = %q, want it in bold iris", settings.Code.Comment, rows[1])
-	}
+	overrideAppearance := appearanceFrom(t, settings)
+	rows, err := CodeFrameRows(block, codeFrame{}, 80, overrideAppearance)
+	require.NoError(t, err)
+	require.Contains(t, rows[1], boldIris)
 	settings.Code.Comment = ""
-	rows, err = CodeFrameRows(block, codeFrame{}, 80, appearanceFrom(t, settings))
-	if err != nil {
-		t.Fatalf("CodeFrameRows: %v", err)
-	}
-	if !strings.Contains(rows[1], draculaComment) || strings.Contains(rows[1], "196;167;231") {
-		t.Errorf("dracula comment row with no comment style = %q, want dracula's own %q", rows[1], draculaComment)
-	}
+	themeAppearance := appearanceFrom(t, settings)
+	rows, err = CodeFrameRows(block, codeFrame{}, 80, themeAppearance)
+	require.NoError(t, err)
+	require.Contains(t, rows[1], draculaComment)
+	require.NotContains(t, rows[1], "196;167;231")
 }
 
-func replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t *testing.T) {
+func assertReplyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t *testing.T, width int) {
+	t.Helper()
 	reply := "Run this:\n\n```powershell\nGet-Process zen |\n\tStop-Process -Force\n```\n\nThen this:\n\n```\nherdr --remote claude-vm\n```\n\nDone."
-	for _, width := range []int{40, 100} {
-		replyRenderer, err := NewReplyRenderer(testAppearance, width)
-		if err != nil {
-			t.Fatalf("NewReplyRenderer(%d): %v", width, err)
+	replyRenderer, err := NewReplyRenderer(testAppearance, width)
+	require.NoError(t, err)
+	rows, err := ReplyRows(reply, map[int]codeFrame{1: {copyHint: true}}, width, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	plain := []string{}
+	for _, row := range rows {
+		plain = append(plain, ansi.Strip(row))
+	}
+	topRules, bottomRules := []string{}, []string{}
+	inFrame := false
+	for index, row := range plain {
+		switch {
+		case strings.HasPrefix(row, "╭"):
+			topRules = append(topRules, row)
+			inFrame = true
+		case strings.HasPrefix(row, "╰"):
+			bottomRules = append(bottomRules, row)
+			inFrame = false
+		case inFrame:
+			require.NotContains(t, row, "╭")
+			require.NotContains(t, row, "╮")
+			require.NotContains(t, row, "╰")
+			require.NotContains(t, row, "╯")
+			require.NotContains(t, row, "│")
+			require.NotContains(t, row, "─")
+			require.NotContains(t, rows[index], "\x1b[48")
 		}
-		rows, err := ReplyRows(reply, map[int]codeFrame{1: {copyHint: true}}, width, replyRenderer, testAppearance)
-		if err != nil {
-			t.Fatalf("ReplyRows at width %d: %v", width, err)
-		}
-		plain := []string{}
-		for _, row := range rows {
-			plain = append(plain, ansi.Strip(row))
-		}
-		topRules, bottomRules := []string{}, []string{}
-		inFrame := false
-		for index, row := range plain {
-			switch {
-			case strings.HasPrefix(row, "╭"):
-				topRules = append(topRules, row)
-				inFrame = true
-			case strings.HasPrefix(row, "╰"):
-				bottomRules = append(bottomRules, row)
-				inFrame = false
-			case inFrame:
-				if strings.ContainsAny(row, "╭╮╰╯│─") || strings.Contains(rows[index], "\x1b[48") {
-					t.Errorf("width %d: code row %q holds a frame character or a background", width, rows[index])
-				}
-			}
-			if strings.HasPrefix(row, "╭") || strings.HasPrefix(row, "╰") {
-				if ruleWidth := ansi.StringWidth(row); ruleWidth != width-2 {
-					t.Errorf("width %d: rule %q is %d columns wide, want %d", width, row, ruleWidth, width-2)
-				}
-			}
-		}
-		if len(topRules) != 2 || len(bottomRules) != 2 {
-			t.Fatalf("width %d: rows = %q, want two frames", width, plain)
-		}
-		if !strings.HasPrefix(topRules[0], "╭─ powershell ─") || strings.Contains(topRules[0], copyKeyHint) {
-			t.Errorf("width %d: first top rule = %q, want the language and no hint", width, topRules[0])
-		}
-		if !strings.HasPrefix(topRules[1], "╭──") || !strings.HasSuffix(topRules[1], "─ "+copyKeyHint+" ─╮") {
-			t.Errorf("width %d: newest top rule = %q, want no language and the hint at its right end", width,
-				topRules[1])
-		}
-		joined := strings.Join(plain, "\n")
-		for _, codeRow := range []string{"\n  Get-Process zen |\n", "\n      Stop-Process -Force\n",
-			"\n  herdr --remote claude-vm\n"} {
-			if !strings.Contains(joined, codeRow) {
-				t.Errorf("width %d: rows = %q, want the code row %q indented 2", width, plain, codeRow)
-			}
-		}
-		if !strings.Contains(joined, "Run this:") || !strings.Contains(joined, "Done.") ||
-			strings.Contains(joined, "ZENCODEBLOCK") {
-			t.Errorf("width %d: reply rows = %q, want the prose around the frames and no placeholder", width, joined)
+		isRule := strings.HasPrefix(row, "╭") || strings.HasPrefix(row, "╰")
+		if isRule {
+			ruleWidth := ansi.StringWidth(row)
+			require.Equal(t, width-2, ruleWidth, row)
 		}
 	}
+	require.Len(t, topRules, 2)
+	require.Len(t, bottomRules, 2)
+	firstShowsLanguage := strings.HasPrefix(topRules[0], "╭─ powershell ─")
+	require.True(t, firstShowsLanguage, topRules[0])
+	require.NotContains(t, topRules[0], copyKeyHint)
+	newestShowsNoLanguage := strings.HasPrefix(topRules[1], "╭──")
+	require.True(t, newestShowsNoLanguage, topRules[1])
+	newestEndsWithHint := strings.HasSuffix(topRules[1], "─ "+copyKeyHint+" ─╮")
+	require.True(t, newestEndsWithHint, topRules[1])
+	joined := strings.Join(plain, "\n")
+	require.Contains(t, joined, "\n  Get-Process zen |\n")
+	require.Contains(t, joined, "\n      Stop-Process -Force\n")
+	require.Contains(t, joined, "\n  herdr --remote claude-vm\n")
+	require.Contains(t, joined, "Run this:")
+	require.Contains(t, joined, "Done.")
+	require.NotContains(t, joined, "ZENCODEBLOCK")
+}
+
+func replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtForty(t *testing.T) {
+	assertReplyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t, 40)
+}
+
+func replyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlockAtHundred(t *testing.T) {
+	assertReplyRowsFrameEachCodeBlockAtReplyWidthAndHintOnlyNumberedBlock(t, 100)
 }
 
 func codeFrameRowsWrapLongLineInsideFrame(t *testing.T) {
 	block := codeBlock{code: "Get-Process -Name zen | Stop-Process -Force -PassThru -Verbose", language: "powershell"}
 	rows, err := CodeFrameRows(block, codeFrame{}, 30, testAppearance)
-	if err != nil {
-		t.Fatalf("CodeFrameRows: %v", err)
-	}
-	if len(rows) < 4 {
-		t.Fatalf("rows = %q, want the code wrapped onto at least two rows between the rules", rows)
-	}
+	require.NoError(t, err)
+	rowCount := len(rows)
+	require.GreaterOrEqual(t, rowCount, 4)
 	codeText := ""
 	for _, row := range rows[1 : len(rows)-1] {
-		if rowWidth := ansi.StringWidth(row); rowWidth > 30 {
-			t.Errorf("code row %q is %d columns wide, more than the frame's 30", ansi.Strip(row), rowWidth)
-		}
+		rowWidth := ansi.StringWidth(row)
+		require.LessOrEqual(t, rowWidth, 30, row)
 		codeText += ansi.Strip(row)
 	}
-	if strings.ReplaceAll(codeText, " ", "") != strings.ReplaceAll(block.code, " ", "") {
-		t.Errorf("wrapped rows hold %q, want the characters of %q", codeText, block.code)
-	}
+	wrappedCharacters := strings.ReplaceAll(codeText, " ", "")
+	codeCharacters := strings.ReplaceAll(block.code, " ", "")
+	require.Equal(t, codeCharacters, wrappedCharacters)
 }
 
 func codeFrameRulesRepeatConfiguredCodeRuleLine(t *testing.T) {
 	settings := exampleSettings(t)
 	settings.Lines = config.Lines{Separator: "━", CodeRule: "═"}
-	rows, err := CodeFrameRows(codeBlock{code: "ls", language: "sh"}, codeFrame{}, 20, appearanceFrom(t, settings))
-	if err != nil {
-		t.Fatalf("CodeFrameRows: %v", err)
-	}
-	for _, rule := range []string{ansi.Strip(rows[0]), ansi.Strip(rows[len(rows)-1])} {
-		if !strings.Contains(rule, "═══") || strings.Contains(rule, "━") || strings.Contains(rule, "─") {
-			t.Errorf("rule %q, want it drawn with the code rule line ═ alone", rule)
-		}
-	}
-}
-
-func topRuleDropsHintThenLanguageWhenTooNarrow(t *testing.T) {
-	cases := []struct {
-		width int
-		want  string
-	}{
-		{width: 34, want: "╭─ go ─────────── ctrl+y copies ─╮"},
-		{width: 20, want: "╭─ go ─────────────╮"},
-		{width: 6, want: "╭────╮"},
-	}
-	for _, testCase := range cases {
-		if got := ansi.Strip(TopRule("go", codeFrame{copyHint: true}, testCase.width, testAppearance)); got != testCase.want {
-			t.Errorf("TopRule at width %d = %q, want %q", testCase.width, got, testCase.want)
-		}
+	drawn := appearanceFrom(t, settings)
+	rows, err := CodeFrameRows(codeBlock{code: "ls", language: "sh"}, codeFrame{}, 20, drawn)
+	require.NoError(t, err)
+	topRule := ansi.Strip(rows[0])
+	drawnBottomRule := ansi.Strip(rows[len(rows)-1])
+	for _, rule := range []string{topRule, drawnBottomRule} {
+		require.Contains(t, rule, "═══")
+		require.NotContains(t, rule, "━")
+		require.NotContains(t, rule, "─")
 	}
 }
 
-func topRuleShowsMarkedAfterLanguageOrAloneAndDropsItWhenTooNarrow(t *testing.T) {
-	cases := []struct {
-		language string
-		width    int
-		want     string
-	}{
-		{language: "go", width: 17, want: "╭─ go · marked ─╮"},
-		{language: "go", width: 16, want: "╭──────────────╮"},
-		{language: "", width: 20, want: "╭─ marked ─────────╮"},
-	}
-	for _, testCase := range cases {
-		got := ansi.Strip(TopRule(testCase.language, codeFrame{marked: true}, testCase.width, testAppearance))
-		if got != testCase.want {
-			t.Errorf("TopRule(%q) marked at width %d = %q, want %q", testCase.language, testCase.width, got, testCase.want)
-		}
-	}
+func topRuleShowsLanguageAndHintWhenWideEnough(t *testing.T) {
+	rule := TopRule("go", codeFrame{copyHint: true}, 34, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭─ go ─────────── ctrl+y copies ─╮", plain)
 }
 
-func replyRowsKeepTextAroundCodeBlock(t *testing.T) {
-	// the rules of a frame in a reply 60 columns wide, which draws 58
-	shTopRule := "╭─ sh " + strings.Repeat("─", 51) + "╮"
-	plainTopRule := "╭" + strings.Repeat("─", 56) + "╮"
-	bottomRule := "╰" + strings.Repeat("─", 56) + "╯"
-	cases := []struct {
-		name  string
-		reply string
-		want  []string
-	}{
-		{name: "in a list item", reply: "1. First step:\n   ```sh\n   echo one\n   ```\n   then this.\n2. Second step",
-			want: []string{"", "1. First step:", shTopRule, "echo one", bottomRule,
-				"then this.", "2. Second step"}},
-		{name: "in a quote", reply: "> Run:\n> ```sh\n> echo one\n> ```\n> done",
-			want: []string{"", "│ Run:", "│", shTopRule, "echo one", bottomRule, "│",
-				"│ done"}},
-		{name: "prose that spells the placeholder", reply: "The row ZENCODEBLOCK0 stays text.\n\n```\necho one\n```",
-			want: []string{"The row ZENCODEBLOCK0 stays text.", "", plainTopRule, "echo one", bottomRule}},
-		{name: "under a heading", reply: "Done.\n\n## Do This Now\n\n```\n# 1. Reopen zen.\n```",
-			want: []string{"Done.", "", "Do This Now", plainTopRule, "# 1. Reopen zen.", bottomRule}},
-	}
+func topRuleDropsHintWhenTooNarrowForIt(t *testing.T) {
+	rule := TopRule("go", codeFrame{copyHint: true}, 20, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭─ go ─────────────╮", plain)
+}
+
+func topRuleDropsLanguageWhenTooNarrowForIt(t *testing.T) {
+	rule := TopRule("go", codeFrame{copyHint: true}, 6, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭────╮", plain)
+}
+
+func topRuleShowsMarkedAfterLanguage(t *testing.T) {
+	rule := TopRule("go", codeFrame{marked: true}, 17, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭─ go · marked ─╮", plain)
+}
+
+func topRuleDropsMarkedWhenTooNarrowForIt(t *testing.T) {
+	rule := TopRule("go", codeFrame{marked: true}, 16, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭──────────────╮", plain)
+}
+
+func topRuleShowsMarkedAloneWithoutLanguage(t *testing.T) {
+	rule := TopRule("", codeFrame{marked: true}, 20, testAppearance)
+	plain := ansi.Strip(rule)
+	require.Equal(t, "╭─ marked ─────────╮", plain)
+}
+
+// the rules of a frame in a reply 60 columns wide, which draws 58
+var (
+	sixtyColumnShTopRule    = "╭─ sh " + strings.Repeat("─", 51) + "╮"
+	sixtyColumnPlainTopRule = "╭" + strings.Repeat("─", 56) + "╮"
+	sixtyColumnBottomRule   = "╰" + strings.Repeat("─", 56) + "╯"
+)
+
+func trimmedReplyRows(t *testing.T, reply string) []string {
+	t.Helper()
 	replyRenderer, err := NewReplyRenderer(testAppearance, 60)
-	if err != nil {
-		t.Fatalf("NewReplyRenderer: %v", err)
+	require.NoError(t, err)
+	rows, err := ReplyRows(reply, nil, 60, replyRenderer, testAppearance)
+	require.NoError(t, err)
+	trimmed := []string{}
+	for _, row := range rows {
+		trimmed = append(trimmed, strings.TrimSpace(ansi.Strip(row)))
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			rows, err := ReplyRows(testCase.reply, nil, 60, replyRenderer, testAppearance)
-			if err != nil {
-				t.Fatalf("ReplyRows: %v", err)
-			}
-			plain := []string{}
-			for _, row := range rows {
-				plain = append(plain, strings.TrimSpace(ansi.Strip(row)))
-			}
-			if !reflect.DeepEqual(plain, testCase.want) {
-				t.Errorf("rows = %q, want %q", plain, testCase.want)
-			}
-		})
-	}
+	return trimmed
 }
 
-func codeBlocksHoldCodeExactlyAsInReply(t *testing.T) {
-	cases := []struct {
-		name  string
-		reply string
-		want  []string
-	}{
-		{name: "a tab and a trailing space", reply: "Run:\n\n```go\nfunc f() {\n\treturn \n}\n```\n",
-			want: []string{"func f() {\n\treturn \n}"}},
-		{name: "in a list item", reply: "1. Step:\n   ```sh\n   echo one\n     indented\n   ```\n2. Next",
-			want: []string{"echo one\n  indented"}},
-		{name: "in a quote", reply: "> ```\n> inside\n> ```", want: []string{"inside"}},
-		{name: "tilde fence left open", reply: "~~~\nfirst\n\nlast", want: []string{"first\n\nlast"}},
-		{name: "two blocks", reply: "```\none\n```\n\n```\ntwo\n```", want: []string{"one", "two"}},
-		{name: "empty block", reply: "```\n```", want: []string{}},
+func replyRowsKeepTextAroundCodeBlockInListItem(t *testing.T) {
+	rows := trimmedReplyRows(t, "1. First step:\n   ```sh\n   echo one\n   ```\n   then this.\n2. Second step")
+	want := []string{"", "1. First step:", sixtyColumnShTopRule, "echo one", sixtyColumnBottomRule, "then this.", "2. Second step"}
+	require.Equal(t, want, rows)
+}
+
+func replyRowsKeepTextAroundCodeBlockInQuote(t *testing.T) {
+	rows := trimmedReplyRows(t, "> Run:\n> ```sh\n> echo one\n> ```\n> done")
+	want := []string{"", "│ Run:", "│", sixtyColumnShTopRule, "echo one", sixtyColumnBottomRule, "│", "│ done"}
+	require.Equal(t, want, rows)
+}
+
+func replyRowsKeepProseSpellingPlaceholderAsText(t *testing.T) {
+	rows := trimmedReplyRows(t, "The row ZENCODEBLOCK0 stays text.\n\n```\necho one\n```")
+	want := []string{"The row ZENCODEBLOCK0 stays text.", "", sixtyColumnPlainTopRule, "echo one", sixtyColumnBottomRule}
+	require.Equal(t, want, rows)
+}
+
+func replyRowsPutHeadingRightOnTopRuleOfCodeBlockUnderIt(t *testing.T) {
+	rows := trimmedReplyRows(t, "Done.\n\n## Do This Now\n\n```\n# 1. Reopen zen.\n```")
+	want := []string{"Done.", "", "Do This Now", sixtyColumnPlainTopRule, "# 1. Reopen zen.", sixtyColumnBottomRule}
+	require.Equal(t, want, rows)
+}
+
+func blockCodes(t *testing.T, reply string) []string {
+	t.Helper()
+	blocks, err := CodeBlocks(reply)
+	require.NoError(t, err)
+	codes := []string{}
+	for _, block := range blocks {
+		codes = append(codes, block.code)
 	}
-	for _, testCase := range cases {
-		t.Run(testCase.name, func(t *testing.T) {
-			blocks, err := CodeBlocks(testCase.reply)
-			if err != nil {
-				t.Fatalf("CodeBlocks: %v", err)
-			}
-			codes := []string{}
-			for _, block := range blocks {
-				codes = append(codes, block.code)
-			}
-			if !reflect.DeepEqual(codes, testCase.want) {
-				t.Errorf("codes = %q, want %q", codes, testCase.want)
-			}
-		})
-	}
+	return codes
+}
+
+func codeBlocksKeepTabAndTrailingSpace(t *testing.T) {
+	codes := blockCodes(t, "Run:\n\n```go\nfunc f() {\n\treturn \n}\n```\n")
+	require.Equal(t, []string{"func f() {\n\treturn \n}"}, codes)
+}
+
+func codeBlocksDropListItemIndent(t *testing.T) {
+	codes := blockCodes(t, "1. Step:\n   ```sh\n   echo one\n     indented\n   ```\n2. Next")
+	require.Equal(t, []string{"echo one\n  indented"}, codes)
+}
+
+func codeBlocksDropQuoteMarker(t *testing.T) {
+	codes := blockCodes(t, "> ```\n> inside\n> ```")
+	require.Equal(t, []string{"inside"}, codes)
+}
+
+func codeBlocksTakeTildeFenceLeftOpenToReplyEnd(t *testing.T) {
+	codes := blockCodes(t, "~~~\nfirst\n\nlast")
+	require.Equal(t, []string{"first\n\nlast"}, codes)
+}
+
+func codeBlocksHoldEachBlockInOrder(t *testing.T) {
+	codes := blockCodes(t, "```\none\n```\n\n```\ntwo\n```")
+	require.Equal(t, []string{"one", "two"}, codes)
+}
+
+func codeBlocksSkipEmptyBlock(t *testing.T) {
+	codes := blockCodes(t, "```\n```")
+	require.Equal(t, []string{}, codes)
 }
