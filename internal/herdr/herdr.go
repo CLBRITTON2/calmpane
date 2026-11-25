@@ -20,18 +20,19 @@ const ClaudePaneToken = "claude_pane"
 const ZenPaneTitle = "Zen"
 
 type Pane struct {
-	PaneID       string            `json:"pane_id"`
-	TabID        string            `json:"tab_id"`
-	Agent        string            `json:"agent"`
-	Label        string            `json:"label"`
-	Focused      bool              `json:"focused"`
-	AgentStatus  string            `json:"agent_status"`
-	Tokens       map[string]string `json:"tokens"`
-	Cwd          string            `json:"cwd"`
-	AgentSession *struct {
-		Agent string `json:"agent"`
-		Value string `json:"value"`
-	} `json:"agent_session"`
+	PaneID      string            `json:"pane_id"`
+	TabID       string            `json:"tab_id"`
+	Agent       string            `json:"agent"`
+	Label       string            `json:"label"`
+	Focused     bool              `json:"focused"`
+	AgentStatus string            `json:"agent_status"`
+	Tokens      map[string]string `json:"tokens"`
+	Cwd         string            `json:"cwd"`
+}
+
+type ForegroundProcess struct {
+	Name string `json:"name"`
+	PID  int    `json:"pid"`
 }
 
 var ErrAgentBlocked = errors.New("agent_blocked")
@@ -68,6 +69,26 @@ func (h CLI) Pane(paneID string) (Pane, error) {
 		return Pane{}, fmt.Errorf("decode herdr pane get %s reply %q: %w", paneID, output, err)
 	}
 	return reply.Result.Pane, nil
+}
+
+// ForegroundProcesses are the processes in the pane's foreground, without their children: a Bash tool's command is not
+// among them.
+func (h CLI) ForegroundProcesses(paneID string) ([]ForegroundProcess, error) {
+	output, err := h.run("pane process-info", "--pane", paneID)
+	if err != nil {
+		return nil, err
+	}
+	var reply struct {
+		Result struct {
+			ProcessInfo struct {
+				ForegroundProcesses []ForegroundProcess `json:"foreground_processes"`
+			} `json:"process_info"`
+		} `json:"result"`
+	}
+	if err := json.Unmarshal(output, &reply); err != nil {
+		return nil, fmt.Errorf("decode herdr pane process-info %s reply %q: %w", paneID, output, err)
+	}
+	return reply.Result.ProcessInfo.ForegroundProcesses, nil
 }
 
 func (h CLI) Panes() ([]Pane, error) {

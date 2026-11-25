@@ -22,6 +22,21 @@ func TestConversationSession(t *testing.T) {
 	t.Run("lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry", lastOpenedBackgroundJobFailsNamingUndecodableLocalCommandEntry)
 	t.Run("conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob",
 		conversationSessionIDIsReportedSessionWhenResumeOpenedNoBackgroundJob)
+	t.Run("processSessionIDFailsWhenSessionsFileHasNoSessionID", processSessionIDFailsWhenSessionsFileHasNoSessionID)
+}
+
+func processSessionIDFailsWhenSessionsFileHasNoSessionID(t *testing.T) {
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	sessionsDir := filepath.Join(home, ".claude", "sessions")
+	err := os.MkdirAll(sessionsDir, 0o755)
+	require.NoError(t, err)
+	sessionsFilePath := filepath.Join(sessionsDir, "4376.json")
+	err = os.WriteFile(sessionsFilePath, []byte(`{"pid":4376,"status":"idle"}`), 0o644)
+	require.NoError(t, err)
+
+	_, err = ProcessSessionID(4376)
+	require.EqualError(t, err, sessionsFilePath+" has no sessionId")
 }
 
 func waitForTranscriptSendsSessionBeforeFirstPromptWritesTranscript(t *testing.T) {

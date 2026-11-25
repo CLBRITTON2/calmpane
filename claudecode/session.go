@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -85,6 +86,35 @@ func lastOpenedBackgroundJob(transcript io.Reader) (string, error) {
 			}
 		}
 	}
+}
+
+// ProcessSessionID is the session the Claude process pid writes, from the sessions file Claude Code keeps for each
+// running Claude, which follows /clear and an in-place /resume. Claude has no such file during its trust dialog, nor
+// once it starts exiting: the error then wraps fs.ErrNotExist.
+func ProcessSessionID(pid int) (string, error) {
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", fmt.Errorf("find the home directory: %w", err)
+	}
+	sessionsFilePath := filepath.Join(home, ".claude", "sessions", strconv.Itoa(pid)+".json")
+	sessionsFileJSON, err := os.ReadFile(sessionsFilePath)
+	if err != nil {
+		return "", fmt.Errorf("Cannot read the sessions file of Claude process %d: %w", pid, err)
+	}
+	var sessionsFile struct {
+		PID       int    `json:"pid"`
+		SessionID string `json:"sessionId"`
+	}
+	if err := json.Unmarshal(sessionsFileJSON, &sessionsFile); err != nil {
+		return "", fmt.Errorf("decode %s: %w", sessionsFilePath, err)
+	}
+	if sessionsFile.PID != pid {
+		return "", fmt.Errorf("%s holds pid %d, not Claude process %d", sessionsFilePath, sessionsFile.PID, pid)
+	}
+	if sessionsFile.SessionID == "" {
+		return "", fmt.Errorf("%s has no sessionId", sessionsFilePath)
+	}
+	return sessionsFile.SessionID, nil
 }
 
 func openTranscript(sessionID string) (*os.File, error) {

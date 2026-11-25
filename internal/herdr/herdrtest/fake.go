@@ -77,6 +77,24 @@ func runFakeHerdr(fakeDir string, arguments []string) error {
 			}
 		}
 		return fmt.Errorf("pane %s not found", arguments[2])
+	case "pane process-info":
+		processes := []herdr.ForegroundProcess{}
+		processesJSON, err := os.ReadFile(foregroundProcessesFile(fakeDir, arguments[3]))
+		if err != nil && !os.IsNotExist(err) {
+			return err
+		}
+		if err == nil {
+			if err := json.Unmarshal(processesJSON, &processes); err != nil {
+				return err
+			}
+		}
+		reply, err := json.Marshal(map[string]map[string]map[string][]herdr.ForegroundProcess{
+			"result": {"process_info": {"foreground_processes": processes}}})
+		if err != nil {
+			return err
+		}
+		_, err = os.Stdout.Write(reply)
+		return err
 	case "pane list":
 		reply, err := json.Marshal(map[string]map[string][]herdr.Pane{"result": {"panes": panes}})
 		if err != nil {
@@ -168,6 +186,21 @@ func ShowOnScreen(t *testing.T, paneID string, capture string, afterKeysCapture 
 		if err := os.WriteFile(file, []byte(CapturedScreen(t, capture)), 0o644); err != nil {
 			t.Fatal(err)
 		}
+	}
+}
+
+func foregroundProcessesFile(fakeDir string, paneID string) string {
+	return filepath.Join(fakeDir, "processes."+strings.ReplaceAll(paneID, ":", "-"))
+}
+
+// RunInForeground makes processes paneID's foreground processes, which a pane has none of until then.
+func RunInForeground(t *testing.T, paneID string, processes []herdr.ForegroundProcess) {
+	processesJSON, err := json.Marshal(processes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(foregroundProcessesFile(os.Getenv(FakeDirEnv), paneID), processesJSON, 0o644); err != nil {
+		t.Fatal(err)
 	}
 }
 

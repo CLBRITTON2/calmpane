@@ -3,6 +3,7 @@ package zenmode
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"time"
 
 	"github.com/CLBRITTON2/calmpane/claudecode"
@@ -82,27 +83,59 @@ func (a HerdrAgent) Status() (ui.AgentStatus, error) {
 	return ui.AgentUnknown, nil
 }
 
-// WaitForSessionID waits for a Claude that just started, whose session herdr reports once it is past its startup
-// prompts. It fails with ui.ErrAgentGone once herdr reports no agent in the pane.
+// sessionsFileMissingLimit is how long a Claude past its trust dialog may have no sessions file. /exit deletes the file
+// about 0.5 s before herdr drops the agent.
+const sessionsFileMissingLimit = 5 * time.Second
+
+// WaitForSessionID reads the session from the sessions file of the pane's own claude.exe, not from herdr's
+// agent_session, which a child Claude's hook report can move. It waits while Claude shows its trust dialog, which comes
+// before the file, and fails with ui.ErrAgentGone once herdr reports no agent in the pane.
 func (a HerdrAgent) WaitForSessionID() (string, error) {
 	if a.ClaudePaneID == "" {
 		return "", fmt.Errorf("%s is not set: the toggle action opens the zen pane", herdr.ClaudePaneEnv)
 	}
+	sessionsFileMissingSince := time.Time{}
 	for {
-		claudePane, err := a.CLI.Pane(a.ClaudePaneID)
+		status, err := a.Status()
 		if err != nil {
 			return "", err
 		}
-		if claudePane.Agent != "claude" {
+		if status == ui.AgentGone {
 			return "", ui.ErrAgentGone
 		}
-		if claudePane.AgentSession == nil {
-			time.Sleep(300 * time.Millisecond)
-			continue
+		processes, err := a.CLI.ForegroundProcesses(a.ClaudePaneID)
+		if err != nil {
+			return "", err
 		}
-		if claudePane.AgentSession.Agent != "claude" {
-			return "", errors.New("No Claude session in this pane.")
+		claudeProcessIDs := []int{}
+		for _, process := range processes {
+			if process.Name == "claude.exe" {
+				claudeProcessIDs = append(claudeProcessIDs, process.PID)
+			}
 		}
-		return claudePane.AgentSession.Value, nil
+		if len(claudeProcessIDs) != 1 {
+			return "", fmt.Errorf("herdr reports Claude in pane %s, whose foreground has %d claude.exe processes %v, not one",
+				a.ClaudePaneID, len(claudeProcessIDs), claudeProcessIDs)
+		}
+		sessionID, sessionErr := claudecode.ProcessSessionID(claudeProcessIDs[0])
+		if sessionErr == nil {
+			return sessionID, nil
+		}
+		if !errors.Is(sessionErr, fs.ErrNotExist) {
+			return "", fmt.Errorf("Claude in pane %s: %w", a.ClaudePaneID, sessionErr)
+		}
+		screen, err := a.CLI.StyledScreen(a.ClaudePaneID)
+		if err != nil {
+			return "", err
+		}
+		if claudecode.TrustDialogShown(screen) {
+			sessionsFileMissingSince = time.Time{}
+		} else if sessionsFileMissingSince.IsZero() {
+			sessionsFileMissingSince = time.Now()
+		} else if time.Since(sessionsFileMissingSince) >= sessionsFileMissingLimit {
+			return "", fmt.Errorf("Claude in pane %s has had no sessions file for %s: %w", a.ClaudePaneID,
+				sessionsFileMissingLimit, sessionErr)
+		}
+		time.Sleep(300 * time.Millisecond)
 	}
 }

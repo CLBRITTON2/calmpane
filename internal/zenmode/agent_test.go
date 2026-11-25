@@ -1,9 +1,10 @@
 package zenmode
 
 import (
-	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -26,25 +27,24 @@ func TestHerdrAgent(t *testing.T) {
 	t.Run("sendPromptSendsPromptLongerThanWindowsCommandLineWhole", sendPromptSendsPromptLongerThanWindowsCommandLineWhole)
 	t.Run("sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt", sendPromptRefusedByHerdrFailsWithItsErrorAndWithoutPrompt)
 	t.Run("sendPromptWithoutSocketPathFailsNamingHerdrSocketPath", sendPromptWithoutSocketPathFailsNamingHerdrSocketPath)
-	t.Run("waitForSessionIDWaitsUntilHerdrReportsClaudeSession", waitForSessionIDWaitsUntilHerdrReportsClaudeSession)
-	t.Run("waitForSessionIDFailsForPaneWithoutClaudeSession", waitForSessionIDFailsForPaneWithoutClaudeSession)
-	t.Run("waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession",
-		waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession)
+	t.Run("waitForSessionIDIsSessionInSessionsFileOfPaneClaudeProcess", waitForSessionIDIsSessionInSessionsFileOfPaneClaudeProcess)
+	t.Run("waitForSessionIDWaitsUntilClaudeProcessWritesSessionsFile", waitForSessionIDWaitsUntilClaudeProcessWritesSessionsFile)
+	t.Run("waitForSessionIDWaitsPastMissingLimitWhileTrustDialogShows", waitForSessionIDWaitsPastMissingLimitWhileTrustDialogShows)
+	t.Run("waitForSessionIDFailsNamingPidAndPathOnceSessionsFileMissingForLimit",
+		waitForSessionIDFailsNamingPidAndPathOnceSessionsFileMissingForLimit)
+	t.Run("waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeWhileSessionsFileMissing",
+		waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeWhileSessionsFileMissing)
+	t.Run("waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeAndPaneRunsNoClaudeProcess",
+		waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeAndPaneRunsNoClaudeProcess)
+	t.Run("waitForSessionIDFailsNamingPaneWhileHerdrReportsClaudeWithoutClaudeProcess",
+		waitForSessionIDFailsNamingPaneWhileHerdrReportsClaudeWithoutClaudeProcess)
+	t.Run("waitForSessionIDFailsNamingPathWhenSessionsFileHoldsAnotherPid", waitForSessionIDFailsNamingPathWhenSessionsFileHoldsAnotherPid)
 	t.Run("statusIsGoneOncePaneRunsNoAgent", statusIsGoneOncePaneRunsNoAgent)
 	t.Run("waitForSessionIDFailsWithoutClaudePaneID", waitForSessionIDFailsWithoutClaudePaneID)
 	t.Run("inputBoxShownWhileClaudePaneShowsEmptyInputBox", inputBoxShownWhileClaudePaneShowsEmptyInputBox)
 	t.Run("inputBoxNotShownWhileClaudePaneShowsBoxScrolledPastItsTop", inputBoxNotShownWhileClaudePaneShowsBoxScrolledPastItsTop)
 	t.Run("workingDirectoryIsClaudePaneCwd", workingDirectoryIsClaudePaneCwd)
 	t.Run("workingDirectoryFailsForPaneWithoutCwd", workingDirectoryFailsForPaneWithoutCwd)
-}
-
-func paneReportingAgentSession(pane herdr.Pane, agent string, sessionID string) herdr.Pane {
-	sessionPane := pane
-	sessionPane.AgentSession = &struct {
-		Agent string `json:"agent"`
-		Value string `json:"value"`
-	}{Agent: agent, Value: sessionID}
-	return sessionPane
 }
 
 func inputBoxShownWhileClaudePaneShowsEmptyInputBox(t *testing.T) {
@@ -155,47 +155,138 @@ func sendPromptSendsPromptLongerThanWindowsCommandLineWhole(t *testing.T) {
 	require.Equal(t, wantRequests, apiRequests)
 }
 
-func waitForSessionIDWaitsUntilHerdrReportsClaudeSession(t *testing.T) {
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+const claudeSessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
+
+const claudeProcessID = 4376
+
+func writeTestSessionsFile(t *testing.T, home string, sessionsFileJSON string) {
+	t.Helper()
+	sessionsDir := filepath.Join(home, ".claude", "sessions")
+	err := os.MkdirAll(sessionsDir, 0o755)
+	require.NoError(t, err)
+	sessionsFilePath := filepath.Join(sessionsDir, strconv.Itoa(claudeProcessID)+".json")
+	err = os.WriteFile(sessionsFilePath, []byte(sessionsFileJSON), 0o644)
+	require.NoError(t, err)
+}
+
+func agentInPaneRunningClaudeProcess(t *testing.T, claudePane herdr.Pane) (HerdrAgent, string) {
+	t.Helper()
+	home := t.TempDir()
+	t.Setenv("USERPROFILE", home)
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{claudePane})
+	herdrtest.RunInForeground(t, claudePane.PaneID, []herdr.ForegroundProcess{
+		{Name: "pwsh.exe", PID: 3672}, {Name: "claude.exe", PID: claudeProcessID}})
+	return HerdrAgent{CLI: cli, ClaudePaneID: claudePane.PaneID}, home
+}
+
+func waitForSessionIDIsSessionInSessionsFileOfPaneClaudeProcess(t *testing.T) {
+	agent, home := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
+	writeTestSessionsFile(t, home, `{"pid":4376,"sessionId":"`+claudeSessionID+`","status":"idle"}`)
+	sessionID, err := agent.WaitForSessionID()
+	require.NoError(t, err)
+	require.Equal(t, claudeSessionID, sessionID)
+}
+
+func waitForSessionIDWaitsUntilClaudeProcessWritesSessionsFile(t *testing.T) {
+	agent, home := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
 	reported := make(chan string, 1)
 	go func() {
-		sessionID, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
+		sessionID, err := agent.WaitForSessionID()
 		assert.NoError(t, err)
 		reported <- sessionID
 	}()
 	time.Sleep(time.Second)
 	require.Empty(t, reported)
-	const sessionID = "24e27105-227a-4078-90e7-50d3dea316bf"
-	claudePane := herdrtest.ClaudePane("w1:p1", true)
-	startedPane := paneReportingAgentSession(claudePane, "claude", sessionID)
-	panesJSON, marshalErr := json.Marshal([]herdr.Pane{startedPane})
-	require.NoError(t, marshalErr)
-	panesFile := filepath.Join(os.Getenv(herdrtest.FakeDirEnv), "panes.json")
-	writeErr := os.WriteFile(panesFile, panesJSON, 0o644)
-	require.NoError(t, writeErr)
+	writeTestSessionsFile(t, home, `{"pid":4376,"sessionId":"`+claudeSessionID+`"}`)
 	select {
 	case reportedSessionID := <-reported:
-		require.Equal(t, sessionID, reportedSessionID)
+		require.Equal(t, claudeSessionID, reportedSessionID)
 	case <-time.After(5 * time.Second):
-		require.FailNow(t, "still waiting 5 s after herdr reported the session")
+		require.FailNow(t, "still waiting 5 s after Claude wrote its sessions file")
 	}
 }
 
-func waitForSessionIDFailsForPaneWithoutClaudeSession(t *testing.T) {
-	claudePane := herdrtest.ClaudePane("w1:p1", true)
-	codexSessionPane := paneReportingAgentSession(claudePane, "codex", "24e27105-227a-4078-90e7-50d3dea316bf")
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{codexSessionPane})
-	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
-	require.NotErrorIs(t, err, ui.ErrAgentGone)
-	require.EqualError(t, err, "No Claude session in this pane.")
+func waitForSessionIDWaitsPastMissingLimitWhileTrustDialogShows(t *testing.T) {
+	agent, home := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
+	herdrtest.ShowOnScreen(t, "w1:p1", "claude-trust-dialog.ansi", "")
+	reported := make(chan string, 1)
+	go func() {
+		sessionID, err := agent.WaitForSessionID()
+		assert.NoError(t, err)
+		reported <- sessionID
+	}()
+	time.Sleep(sessionsFileMissingLimit + time.Second)
+	require.Empty(t, reported)
+	writeTestSessionsFile(t, home, `{"pid":4376,"sessionId":"`+claudeSessionID+`"}`)
+	select {
+	case reportedSessionID := <-reported:
+		require.Equal(t, claudeSessionID, reportedSessionID)
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "still waiting 5 s after Claude wrote its sessions file")
+	}
 }
 
-func waitForSessionIDFailsWithAgentGoneOnceClaudeLeftPaneWithItsSession(t *testing.T) {
-	agentlessPane := herdr.Pane{PaneID: "w1:p1", Focused: true, AgentStatus: "idle"}
-	exitedPane := paneReportingAgentSession(agentlessPane, "claude", "24e27105-227a-4078-90e7-50d3dea316bf")
-	cli, _ := herdrtest.Fake(t, []herdr.Pane{exitedPane})
+func waitForSessionIDFailsNamingPidAndPathOnceSessionsFileMissingForLimit(t *testing.T) {
+	agent, home := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
+	started := time.Now()
+	_, err := agent.WaitForSessionID()
+	waited := time.Since(started)
+	require.GreaterOrEqual(t, waited, sessionsFileMissingLimit)
+	require.ErrorIs(t, err, fs.ErrNotExist)
+	require.NotErrorIs(t, err, ui.ErrAgentGone)
+	sessionsFilePath := filepath.Join(home, ".claude", "sessions", "4376.json")
+	require.ErrorContains(t, err, sessionsFilePath)
+	require.ErrorContains(t, err, "Claude in pane w1:p1 has had no sessions file for 5s")
+	require.ErrorContains(t, err, "Claude process 4376")
+}
+
+func waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeWhileSessionsFileMissing(t *testing.T) {
+	agent, _ := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
+	started := time.Now()
+	failed := make(chan error, 1)
+	go func() {
+		_, err := agent.WaitForSessionID()
+		failed <- err
+	}()
+	time.Sleep(time.Second)
+	require.Empty(t, failed)
+	agentlessPanesJSON := `[{"pane_id":"w1:p1","focused":true,"agent_status":"idle"}]`
+	panesFile := filepath.Join(os.Getenv(herdrtest.FakeDirEnv), "panes.json")
+	err := os.WriteFile(panesFile, []byte(agentlessPanesJSON), 0o644)
+	require.NoError(t, err)
+	select {
+	case err = <-failed:
+	case <-time.After(5 * time.Second):
+		require.FailNow(t, "still waiting 5 s after herdr dropped Claude")
+	}
+	waited := time.Since(started)
+	require.ErrorIs(t, err, ui.ErrAgentGone)
+	require.Less(t, waited, sessionsFileMissingLimit)
+}
+
+func waitForSessionIDFailsWithAgentGoneOnceHerdrDropsClaudeAndPaneRunsNoClaudeProcess(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{{PaneID: "w1:p1", Focused: true, AgentStatus: "idle"}})
+	herdrtest.RunInForeground(t, "w1:p1", []herdr.ForegroundProcess{{Name: "pwsh.exe", PID: 3672}})
 	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
 	require.ErrorIs(t, err, ui.ErrAgentGone)
+}
+
+func waitForSessionIDFailsNamingPaneWhileHerdrReportsClaudeWithoutClaudeProcess(t *testing.T) {
+	cli, _ := herdrtest.Fake(t, []herdr.Pane{herdrtest.ClaudePane("w1:p1", true)})
+	herdrtest.RunInForeground(t, "w1:p1", []herdr.ForegroundProcess{{Name: "pwsh.exe", PID: 3672}})
+	_, err := HerdrAgent{CLI: cli, ClaudePaneID: "w1:p1"}.WaitForSessionID()
+	require.NotErrorIs(t, err, ui.ErrAgentGone)
+	require.EqualError(t, err,
+		"herdr reports Claude in pane w1:p1, whose foreground has 0 claude.exe processes [], not one")
+}
+
+func waitForSessionIDFailsNamingPathWhenSessionsFileHoldsAnotherPid(t *testing.T) {
+	agent, home := agentInPaneRunningClaudeProcess(t, herdrtest.ClaudePane("w1:p1", true))
+	writeTestSessionsFile(t, home, `{"pid":8200,"sessionId":"`+claudeSessionID+`"}`)
+	_, err := agent.WaitForSessionID()
+	sessionsFilePath := filepath.Join(home, ".claude", "sessions", "4376.json")
+	wantText := "Claude in pane w1:p1: " + sessionsFilePath + " holds pid 8200, not Claude process 4376"
+	require.EqualError(t, err, wantText)
 }
 
 func statusIsGoneOncePaneRunsNoAgent(t *testing.T) {
